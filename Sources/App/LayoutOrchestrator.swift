@@ -15,8 +15,12 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     private var lastFrontBundle: String?
     private var isConverting = false
     private var conversionGeneration = 0
+    private var lastBufferedWord = ""
+    private var lastCheckResult = "—"
+    private var keyEventCount = 0
 
     var onStatusChange: ((String) -> Void)?
+    var isTapActive: Bool { eventTap.isEnabled }
 
     init(settings: AppSettings) {
         self.settings = settings
@@ -32,6 +36,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     func start() -> Bool {
         ensureLayoutIDs()
         let ok = eventTap.start()
+        AppLog.line("eventTap.start => \(ok), layout=\(inputSources.currentSourceID)")
         onStatusChange?(ok ? "active" : "no-tap")
         return ok
     }
@@ -39,6 +44,25 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     func stop() {
         eventTap.stop()
         onStatusChange?("stopped")
+    }
+
+    func diagnostics() -> String {
+        let ax = AccessibilityPermission.isTrusted
+        return """
+        Accessibility: \(ax ? "ok" : "NO")
+        Event tap: \(eventTap.isEnabled ? "ok" : "NO")
+        Autocorrect: \(settings.isAutocorrectionActive ? "on" : "off")
+        Layout: \(inputSources.currentSourceID)
+        Front app: \(FrontmostApp.bundleID ?? "?")
+        Keys seen: \(keyEventCount)
+        Last buffer: «\(lastBufferedWord)»
+        Last check: \(lastCheckResult)
+        Excluded: \(settings.excludedApps.joined(separator: ", "))
+        Log: ~/Library/Logs/SwitcherSilicon.log
+
+        Выключи Caramba Switcher / RuSwitcher / Punto — они перехватывают те же клавиши.
+        Держи приложение в /Applications/SwitcherSilicon.app
+        """
     }
 
     func reloadSettings(_ settings: AppSettings) {
@@ -64,6 +88,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         if isConverting || EventSynth.isSynthesizing {
             return Unmanaged.passUnretained(event)
         }
+
+        keyEventCount += 1
 
         if isExcludedFrontApp() {
             buffer.clear()
@@ -98,6 +124,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         let shift = flags.contains(.maskShift)
         if let glyph = resolvedGlyph(characters: characters, keyCode: keyCode, shift: shift) {
             buffer.append(KeyStroke(characters: glyph, keyCode: keyCode))
+            lastBufferedWord = buffer.stringValue
         }
 
         return Unmanaged.passUnretained(event)
@@ -137,22 +164,34 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     private func scheduleAutoConvertAfterSeparator(separatorKeyCode: UInt16) {
         let word = buffer.stringValue
         buffer.clear()
+        lastBufferedWord = word
 
         if skipNextWord {
             skipNextWord = false
+            AppLog.line("skip next word after manual")
             return
         }
-        guard settings.isAutocorrectionActive else { return }
+        guard settings.isAutocorrectionActive else {
+            AppLog.line("auto off, word=\(word)")
+            return
+        }
         if settings.noAutoconvertAfterTabOrEnter,
            separatorKeyCode == 48 || separatorKeyCode == 36 || separatorKeyCode == 76
         {
             return
         }
-        guard word.count >= 2 else { return }
-        guard checker.check(word) == .incorrect else { return }
+        guard word.count >= 2 else {
+            AppLog.line("word too short «\(word)»")
+            return
+        }
+        let check = checker.check(word)
+        lastCheckResult = "\(check) for «\(word)»"
+        AppLog.line("check \(lastCheckResult)")
+        guard check == .incorrect else { return }
 
         let converted = ConversionEngine.convert(word, direction: .auto)
         guard converted != word else { return }
+        AppLog.line("schedule convert «\(word)» -> «\(converted)»")
 
         let sep = WordDetector.separatorString(forKeyCode: separatorKeyCode)
         // For Return/Tab, deleting a newline/tab by character count is unreliable —
