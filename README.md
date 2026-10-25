@@ -7,6 +7,12 @@ Converts text typed in the wrong keyboard layout (EN ↔ RU), with optional typo
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-macOS%2014+%20arm64-black)](#requirements)
 
+## Download
+
+**[v0.1.0 — SwitcherSilicon-0.1.0-macos-arm64.zip](https://github.com/sergeinorth/switcher_silicon/releases/latest)**
+
+Unpack, move `SwitcherSilicon.app` to `/Applications`, allow Accessibility + Input Monitoring. See release notes for Gatekeeper tips.
+
 ## Features
 
 - **Auto layout convert** — after Space, flips a mistyped word (`ghbdtn` → `привет`) and switches input source
