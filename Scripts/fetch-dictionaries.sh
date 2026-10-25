@@ -1,10 +1,13 @@
 #!/bin/bash
 # Rebuild bundled RU/EN word lists from upstream open sources.
 set -euo pipefail
-cd "$(dirname "$0")/.."
-OUT="Sources/Engine/Resources/Dictionaries"
-mkdir -p "$OUT" /tmp/switcher_dicts
-cd /tmp/switcher_dicts
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+OUT="$REPO_ROOT/Sources/Engine/Resources/Dictionaries"
+WORKDIR="/tmp/switcher_dicts"
+mkdir -p "$OUT" "$WORKDIR"
+cd "$WORKDIR"
+export SWITCHER_DICT_OUT="$OUT"
 
 echo "Downloading…"
 curl -fsSL -o russian1251.txt "https://raw.githubusercontent.com/danakt/russian-words/master/russian.txt"
@@ -12,9 +15,6 @@ curl -fsSL -o words_alpha.txt "https://raw.githubusercontent.com/dwyl/english-wo
 curl -fsSL -o ru100k.txt "https://raw.githubusercontent.com/hingston/russian/master/100000-russian-words.txt"
 curl -fsSL -o ru50k.txt "https://raw.githubusercontent.com/hingston/russian/master/50000-russian-words-cyrillic-only.txt"
 curl -fsSL -o ru10k.txt "https://raw.githubusercontent.com/hingston/russian/master/10000-russian-words-cyrillic-only.txt"
-
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-export SWITCHER_DICT_OUT="$REPO_ROOT/Sources/Engine/Resources/Dictionaries"
 
 python3 <<'PY'
 import gzip, re, pathlib, os
