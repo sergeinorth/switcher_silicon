@@ -2,32 +2,44 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-swift build -c release --arch arm64
-BIN=".build/release/SwitcherSilicon"
+CERT_NAME="SwitcherSilicon CodeSign"
+BIN_NAME="SwitcherSilicon"
 BUILD_APP="build/SwitcherSilicon.app"
 INSTALL_APP="/Applications/SwitcherSilicon.app"
 
+swift build -c release --arch arm64
+BIN=".build/release/${BIN_NAME}"
+
 rm -rf "$BUILD_APP"
 mkdir -p "$BUILD_APP/Contents/MacOS" "$BUILD_APP/Contents/Resources"
-cp "$BIN" "$BUILD_APP/Contents/MacOS/SwitcherSilicon"
+cp "$BIN" "$BUILD_APP/Contents/MacOS/${BIN_NAME}"
 cp Resources/Info.plist "$BUILD_APP/Contents/Info.plist"
 printf 'APPL????' > "$BUILD_APP/Contents/PkgInfo"
 
-codesign --force --sign - --entitlements Resources/SwitcherSilicon.entitlements "$BUILD_APP" 2>/dev/null \
-  || codesign --force --sign - "$BUILD_APP"
+sign_app() {
+  local app="$1"
+  if security find-identity -v -p codesigning | grep -q "$CERT_NAME"; then
+    codesign --force --deep --sign "$CERT_NAME" "$app"
+    echo "Signed with $CERT_NAME"
+  else
+    codesign --force --sign - "$app"
+    echo "WARNING: signed ad-hoc (TCC will break on each rebuild)"
+  fi
+}
 
-# Update in place (avoid rm -rf of the authorized app when possible).
-pkill -f 'SwitcherSilicon.app/Contents/MacOS/SwitcherSilicon' 2>/dev/null || true
+sign_app "$BUILD_APP"
+
+pkill -f "${INSTALL_APP}/Contents/MacOS/${BIN_NAME}" 2>/dev/null || true
 sleep 0.2
 if [[ -d "$INSTALL_APP" ]]; then
   ditto "$BUILD_APP" "$INSTALL_APP"
 else
   cp -R "$BUILD_APP" "$INSTALL_APP"
 fi
-codesign --force --sign - "$INSTALL_APP" 2>/dev/null || true
+sign_app "$INSTALL_APP"
 xattr -cr "$INSTALL_APP" 2>/dev/null || true
 
 echo "Built $BUILD_APP"
 echo "Installed $INSTALL_APP"
-echo "NOTE: After each new binary, re-toggle Accessibility + Input Monitoring if icon shows !"
-file "$INSTALL_APP/Contents/MacOS/SwitcherSilicon"
+codesign -dv "$INSTALL_APP" 2>&1 | grep -E 'Identifier|Signature|TeamIdentifier|Authority' || true
+file "$INSTALL_APP/Contents/MacOS/${BIN_NAME}"
