@@ -13,6 +13,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     private var skipNextWord = false
     private var appLayouts: [String: String] = [:]
     private var lastFrontBundle: String?
+    private var isConverting = false
+    private var conversionGeneration = 0
 
     var onStatusChange: ((String) -> Void)?
 
@@ -59,12 +61,15 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     // MARK: - EventTapDelegate
 
     func eventTap(didReceiveKeyDown keyCode: UInt16, characters: String, flags: CGEventFlags, event: CGEvent) -> Unmanaged<CGEvent>? {
+        if isConverting || EventSynth.isSynthesizing {
+            return Unmanaged.passUnretained(event)
+        }
+
         if isExcludedFrontApp() {
             buffer.clear()
             return Unmanaged.passUnretained(event)
         }
 
-        // Cmd/Ctrl shortcuts — reset buffer, don't convert.
         if flags.contains(.maskCommand) || flags.contains(.maskControl) {
             buffer.clear()
             return Unmanaged.passUnretained(event)
@@ -81,23 +86,21 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         }
 
         if WordDetector.isSeparatorKeyCode(keyCode) || characters.contains(where: WordDetector.isSeparator) {
-            if scheduleAutoConvertIfNeeded(separatorKeyCode: keyCode, separatorCharacters: characters) {
-                // Swallow separator; it will be re-posted after conversion.
-                return nil
-            }
+            // Never swallow the separator — let it land, then replace word+sep.
+            scheduleAutoConvertAfterSeparator(
+                separatorKeyCode: keyCode,
+                separatorCharacters: characters
+            )
             return Unmanaged.passUnretained(event)
         }
 
-        // Printable character — accumulate.
-        if !characters.isEmpty, !flags.contains(.maskAlternate) || characters != "" {
-            // Ignore bare Option (no character) — handled on flagsChanged.
-            if flags.contains(.maskAlternate) && characters.isEmpty {
-                return Unmanaged.passUnretained(event)
-            }
-            if !characters.isEmpty {
-                for ch in characters {
-                    buffer.append(KeyStroke(characters: String(ch), keyCode: keyCode))
-                }
+        if flags.contains(.maskAlternate) && characters.isEmpty {
+            return Unmanaged.passUnretained(event)
+        }
+
+        if !characters.isEmpty {
+            for ch in characters where !WordDetector.isSeparator(ch) {
+                buffer.append(KeyStroke(characters: String(ch), keyCode: keyCode))
             }
         }
 
@@ -109,9 +112,11 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     }
 
     func eventTapDidReceiveFlagsChanged(event: CGEvent) -> Unmanaged<CGEvent>? {
+        if isConverting || EventSynth.isSynthesizing {
+            return Unmanaged.passUnretained(event)
+        }
         if settings.useOptionTrigger, eventTap.consumeOptionTap() {
-            // Defer so Option key-up finishes before we synthesize input.
-            DispatchQueue.main.async { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
                 self?.convertLastWord(manual: true)
             }
         }
@@ -120,68 +125,96 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
 
     // MARK: - Conversion
 
-    /// Returns true when the separator event should be swallowed (conversion scheduled).
-    private func scheduleAutoConvertIfNeeded(separatorKeyCode: UInt16, separatorCharacters: String) -> Bool {
-        defer { buffer.clear() }
+    private func scheduleAutoConvertAfterSeparator(separatorKeyCode: UInt16, separatorCharacters: String) {
+        let word = buffer.stringValue
+        buffer.clear()
 
         if skipNextWord {
             skipNextWord = false
-            return false
+            return
         }
-
-        guard settings.isAutocorrectionActive else { return false }
-
+        guard settings.isAutocorrectionActive else { return }
         if settings.noAutoconvertAfterTabOrEnter,
            separatorKeyCode == 48 || separatorKeyCode == 36 || separatorKeyCode == 76
         {
-            return false
+            return
+        }
+        guard !word.isEmpty else { return }
+        guard checker.check(word) == .incorrect else { return }
+
+        let converted = ConversionEngine.convert(word, direction: .auto)
+        guard converted != word else { return }
+
+        let sep: String
+        if separatorKeyCode == 49 || separatorCharacters == " " {
+            sep = " "
+        } else if !separatorCharacters.isEmpty {
+            sep = separatorCharacters
+        } else {
+            sep = ""
         }
 
-        let word = buffer.stringValue
-        guard !word.isEmpty else { return false }
-        guard checker.check(word) == .incorrect else { return false }
+        // Word + separator are (about to be) in the document. Wait for the
+        // separator key to commit, then delete both and type fixed text + sep.
+        conversionGeneration += 1
+        let generation = conversionGeneration
+        let deleteCount = word.count + (sep.isEmpty ? 0 : sep.count)
 
-        let sep = separatorCharacters.isEmpty ? " " : separatorCharacters
-        DispatchQueue.main.async { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) { [weak self] in
             guard let self else { return }
-            self.performConversion(of: word, manual: false)
-            // Re-type the swallowed separator after the fixed word.
-            usleep(10_000)
-            EventSynth.typeText(sep)
+            guard generation == self.conversionGeneration else { return }
+            self.performReplacement(
+                original: word,
+                converted: converted,
+                deleteCount: deleteCount,
+                suffix: sep,
+                manual: false
+            )
         }
-        return true
     }
 
     private func convertLastWord(manual: Bool) {
-        // Manual Option: convert buffer if present; otherwise try selected text later.
+        guard !isConverting else { return }
         let word = buffer.stringValue
         if !word.isEmpty {
-            performConversion(of: word, manual: true)
+            let converted = ConversionEngine.convert(word, direction: .auto)
             buffer.clear()
             if settings.cancelNextWordAfterManualSwitch {
                 skipNextWord = true
             }
+            guard converted != word else { return }
+            performReplacement(
+                original: word,
+                converted: converted,
+                deleteCount: word.count,
+                suffix: "",
+                manual: true
+            )
             return
         }
-
-        // Empty buffer — convert selected text via clipboard fallback.
         convertSelectionIfAny()
     }
 
-    private func performConversion(of word: String, manual: Bool) {
-        let converted = ConversionEngine.convert(word, direction: .auto)
-        guard converted != word else { return }
+    private func performReplacement(
+        original: String,
+        converted: String,
+        deleteCount: Int,
+        suffix: String,
+        manual: Bool
+    ) {
+        guard !isConverting else { return }
+        isConverting = true
+        defer { isConverting = false }
 
-        let toRussian = ConversionEngine.dominantScript(converted) == .cyrillic
-            || (ConversionEngine.dominantScript(word) == .latin)
+        let toRussian = ConversionEngine.dominantScript(original) == .latin
+            || ConversionEngine.dominantScript(converted) == .cyrillic
 
         undo.remember(ConversionSnapshot(
-            original: word,
+            original: original,
             converted: converted,
             switchedToRussian: toRussian
         ))
 
-        // Switch layout first, then replace text.
         if toRussian {
             _ = inputSources.switchToRussian(preferredID: settings.russianLayoutID)
             soundPlayer.play(manual ? .switchToRussian : .autoConvert)
@@ -190,7 +223,10 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             soundPlayer.play(manual ? .switchToEnglish : .autoConvert)
         }
 
-        EventSynth.replaceLastWord(originalLength: word.count, with: converted)
+        // Tiny pause so TIS layout switch settles before we emit glyphs.
+        usleep(15_000)
+        EventSynth.replaceCharacters(deleteCount: deleteCount, with: converted + suffix)
+        buffer.clear()
         onStatusChange?(manual ? "manual:\(converted)" : "auto:\(converted)")
     }
 
@@ -198,10 +234,11 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         let pasteboard = NSPasteboard.general
         let previous = pasteboard.string(forType: .string)
 
-        // Copy selection
-        EventSynth.postKey(keyCode: 8, keyDown: true, flags: .maskCommand) // C
+        EventSynth.isSynthesizing = true
+        EventSynth.postKey(keyCode: 8, keyDown: true, flags: .maskCommand)
         EventSynth.postKey(keyCode: 8, keyDown: false, flags: .maskCommand)
-        usleep(40_000)
+        usleep(50_000)
+        EventSynth.isSynthesizing = false
 
         guard let selected = pasteboard.string(forType: .string), !selected.isEmpty else {
             if let previous {
@@ -220,7 +257,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             return
         }
 
-        let toRussian = ConversionEngine.dominantScript(converted) == .cyrillic
+        let toRussian = ConversionEngine.dominantScript(selected) == .latin
         if toRussian {
             _ = inputSources.switchToRussian(preferredID: settings.russianLayoutID)
         } else {
@@ -229,11 +266,13 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
 
         pasteboard.clearContents()
         pasteboard.setString(converted, forType: .string)
-        EventSynth.postKey(keyCode: 9, keyDown: true, flags: .maskCommand) // V
+        EventSynth.isSynthesizing = true
+        EventSynth.postKey(keyCode: 9, keyDown: true, flags: .maskCommand)
         EventSynth.postKey(keyCode: 9, keyDown: false, flags: .maskCommand)
+        EventSynth.isSynthesizing = false
         soundPlayer.play(.selectionConvert)
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             if let previous {
                 pasteboard.clearContents()
                 pasteboard.setString(previous, forType: .string)
@@ -242,9 +281,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     }
 
     func undoLastConversion() {
-        guard let last = undo.last else { return }
-        // Replace converted with original: user must be at end of converted word.
-        EventSynth.replaceLastWord(originalLength: last.converted.count, with: last.original)
+        guard let last = undo.last, !isConverting else { return }
+        EventSynth.replaceCharacters(deleteCount: last.converted.count, with: last.original)
         if last.switchedToRussian {
             _ = inputSources.switchToEnglish(preferredID: settings.englishLayoutID)
         } else {
@@ -260,23 +298,30 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         let word = buffer.stringValue
         if !word.isEmpty {
             let toggled = ConversionEngine.toggleCase(word)
-            EventSynth.replaceLastWord(originalLength: word.count, with: toggled)
+            EventSynth.replaceCharacters(deleteCount: word.count, with: toggled)
             buffer.clear()
             return
         }
-        // Selection via clipboard
+        convertSelectionCase()
+    }
+
+    private func convertSelectionCase() {
         let pasteboard = NSPasteboard.general
         let previous = pasteboard.string(forType: .string)
+        EventSynth.isSynthesizing = true
         EventSynth.postKey(keyCode: 8, keyDown: true, flags: .maskCommand)
         EventSynth.postKey(keyCode: 8, keyDown: false, flags: .maskCommand)
-        usleep(40_000)
+        usleep(50_000)
+        EventSynth.isSynthesizing = false
         guard let selected = pasteboard.string(forType: .string), !selected.isEmpty else { return }
         let toggled = ConversionEngine.toggleCase(selected)
         pasteboard.clearContents()
         pasteboard.setString(toggled, forType: .string)
+        EventSynth.isSynthesizing = true
         EventSynth.postKey(keyCode: 9, keyDown: true, flags: .maskCommand)
         EventSynth.postKey(keyCode: 9, keyDown: false, flags: .maskCommand)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+        EventSynth.isSynthesizing = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             if let previous {
                 pasteboard.clearContents()
                 pasteboard.setString(previous, forType: .string)
@@ -326,6 +371,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         }
         lastFrontBundle = bundle
         buffer.clear()
+        conversionGeneration += 1
 
         if let saved = appLayouts[bundle], !saved.isEmpty {
             _ = inputSources.select(sourceID: saved)
