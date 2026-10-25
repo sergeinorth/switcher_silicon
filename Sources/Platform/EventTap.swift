@@ -74,7 +74,8 @@ public final class EventTap {
             return Unmanaged.passUnretained(event)
         }
 
-        if EventSynth.isOurs(event) {
+        // Pass through our synthetic stream without buffering / converting.
+        if EventSynth.isOurs(event) || EventSynth.isSynthesizing {
             return Unmanaged.passUnretained(event)
         }
 
@@ -102,7 +103,6 @@ public final class EventTap {
         }
     }
 
-    /// Detects a quick left/right Option press-and-release with no other keys.
     public private(set) var pendingOptionTap = false
 
     public func consumeOptionTap() -> Bool {
@@ -113,7 +113,7 @@ public final class EventTap {
     private func trackOptionTap(_ event: CGEvent) {
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let flags = event.flags
-        let isOptionKey = keyCode == 58 || keyCode == 61 // left / right Option
+        let isOptionKey = keyCode == 58 || keyCode == 61
         guard isOptionKey else {
             if optionDownAt != nil {
                 optionAlone = false
@@ -128,7 +128,7 @@ public final class EventTap {
             pendingOptionTap = false
         } else if let started = optionDownAt {
             let duration = CFAbsoluteTimeGetCurrent() - started
-            if optionAlone && duration < 0.45 {
+            if optionAlone && duration < 0.35 {
                 pendingOptionTap = true
             }
             optionDownAt = nil
@@ -138,8 +138,8 @@ public final class EventTap {
 
     private func characters(from event: CGEvent) -> String {
         var length = 0
-        var buffer = [UniChar](repeating: 0, count: 4)
-        event.keyboardGetUnicodeString(maxStringLength: 4, actualStringLength: &length, unicodeString: &buffer)
+        var buffer = [UniChar](repeating: 0, count: 8)
+        event.keyboardGetUnicodeString(maxStringLength: 8, actualStringLength: &length, unicodeString: &buffer)
         guard length > 0 else { return "" }
         return String(utf16CodeUnits: buffer, count: Int(length))
     }

@@ -59,26 +59,10 @@ public struct LayoutChecker: Sendable {
             return .unknown
         }
 
-        // Converted looks like a real word — wrong layout.
+        // Only auto-convert when the flipped form is a known dictionary word
+        // and the typed form is not. Heuristics caused false positives and
+        // mid-word mangling ("пgthtrkxftn").
         if convertedIsRussianWord || convertedIsEnglishWord {
-            return .incorrect
-        }
-
-        // Heuristic: pure latin that maps to cyrillic letters of length >= 3
-        // and contains no vowels typical for English nonsense like "asdf".
-        if ConversionEngine.dominantScript(word) == .latin,
-           converted.contains(where: { !$0.isASCII }),
-           word.count >= 3,
-           looksLikeMistypedRussian(lower)
-        {
-            return .incorrect
-        }
-
-        if ConversionEngine.dominantScript(word) == .cyrillic,
-           converted.allSatisfy({ $0.isASCII || !$0.isLetter }),
-           word.count >= 3,
-           looksLikeMistypedEnglish(lower)
-        {
             return .incorrect
         }
 
@@ -94,20 +78,6 @@ public struct LayoutChecker: Sendable {
                 } ?? false
         }
         return word.caseInsensitiveCompare(rule.pattern) == .orderedSame
-    }
-
-    private func looksLikeMistypedRussian(_ lower: String) -> Bool {
-        // Common English-looking garbage that is actually Russian on wrong layout.
-        let russianVowelKeys: Set<Character> = ["f", "a", "t", "u", "e", "n", "y", "o", "`"]
-        return lower.contains(where: { russianVowelKeys.contains($0) })
-    }
-
-    private func looksLikeMistypedEnglish(_ lower: String) -> Bool {
-        let englishVowelKeys: Set<Character> = ["ф", "ы", "в", "а", "п", "р", "о", "л", "д", "ж", "э", "я", "ч", "с", "м", "и", "т", "ь", "б", "ю"]
-        // If it has many cyrillic letters that sit on Latin vowel positions when flipped.
-        let flipped = ConversionEngine.convert(lower, direction: .russianToUs)
-        let vowels: Set<Character> = ["a", "e", "i", "o", "u", "y"]
-        return flipped.contains(where: { vowels.contains($0) }) || lower.contains(where: { englishVowelKeys.contains($0) })
     }
 }
 
@@ -138,6 +108,10 @@ public enum SeedDictionary: Sendable {
         "понимать", "помнить", "забыть", "ждать", "любить", "играть", "купить",
         "продать", "открыть", "закрыть", "начать", "кончить", "закончить",
         "проверка", "ошибка", "исправить", "раскладка", "клавиша", "переключить",
+        "неправильно", "правильно", "переключает", "переключение", "иногда",
+        "одну", "одну", "букву", "несколько", "оставляет", "перевод", "перевода",
+        "дублирует", "сейчас", "почему", "потому", "буква", "символ", "текст",
+        "набрать", "набрал", "опечатка", "исправление", "слово", "пробел",
     ]
 
     public static let english: Set<String> = [
