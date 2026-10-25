@@ -1,5 +1,4 @@
 import AppKit
-import AudioToolbox
 import Engine
 
 public enum SoundEvent: Sendable {
@@ -26,25 +25,31 @@ public final class SoundPlayer: @unchecked Sendable {
         switch event {
         case .switchToRussian:
             mask = .switchToRussian
-            fileName = "Tink" // higher
+            fileName = settings.soundPrefs.switchToRussian
         case .switchToEnglish:
             mask = .switchToEnglish
-            fileName = "Pop"
+            fileName = settings.soundPrefs.switchToEnglish
         case .autoConvert:
             mask = .autoConvert
-            fileName = "Tink"
+            fileName = settings.soundPrefs.autoConvert
         case .undo:
             mask = .undo
-            fileName = "Bottle"
+            fileName = settings.soundPrefs.undo
         case .selectionConvert:
             mask = .selectionConvert
-            fileName = "Purr"
+            fileName = settings.soundPrefs.selectionConvert
         }
 
         guard settings.sounds.contains(mask) else { return }
 
         DispatchQueue.main.async { [weak self] in
             self?.playNamed(fileName)
+        }
+    }
+
+    public func preview(named name: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.playNamed(name)
         }
     }
 
@@ -62,7 +67,6 @@ public final class SoundPlayer: @unchecked Sendable {
             sound.play()
             return
         }
-        // Last resort
         NSSound.beep()
     }
 }
