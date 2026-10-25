@@ -158,10 +158,6 @@ final class StatusBarController {
         undoItem.target = self
         menu.addItem(undoItem)
 
-        let caseItem = NSMenuItem(title: s(.changeCase), action: #selector(changeCase), keyEquivalent: "")
-        caseItem.target = self
-        menu.addItem(caseItem)
-
         menu.addItem(.separator())
 
         let diagItem = NSMenuItem(title: s(.diagnostics), action: #selector(showDiagnostics), keyEquivalent: "")
@@ -303,10 +299,6 @@ final class StatusBarController {
 
     @objc private func undo() {
         orchestrator.undoLastConversion()
-    }
-
-    @objc private func changeCase() {
-        orchestrator.changeCaseOfBufferOrSelection()
     }
 
     @objc private func openAccessibility() {

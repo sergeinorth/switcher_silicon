@@ -22,8 +22,4 @@ final class ConversionEngineTests: XCTestCase {
         XCTAssertEqual(ConversionEngine.convert("ntcn123", direction: .usToRussian), "тест123")
         XCTAssertEqual(ConversionEngine.convert("test", direction: .usToRussian), "еуые")
     }
-
-    func testToggleCase() {
-        XCTAssertEqual(ConversionEngine.toggleCase("Привет"), "пРИВЕТ")
-    }
 }

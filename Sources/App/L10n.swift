@@ -27,7 +27,6 @@ enum L10n {
         case launchOn
         case launchOff
         case undoLast
-        case changeCase
         case diagnostics
         case openInputMonitoring
         case openAccessibility
@@ -65,7 +64,6 @@ enum L10n {
             case .launchOn: return "Запуск при входе: вкл"
             case .launchOff: return "Запуск при входе: выкл"
             case .undoLast: return "Отменить последнюю конвертацию"
-            case .changeCase: return "Сменить регистр"
             case .diagnostics: return "Диагностика…"
             case .openInputMonitoring: return "Открыть Мониторинг ввода…"
             case .openAccessibility: return "Открыть Универсальный доступ…"
@@ -116,7 +114,6 @@ enum L10n {
             case .launchOn: return "Launch at login: on"
             case .launchOff: return "Launch at login: off"
             case .undoLast: return "Undo last conversion"
-            case .changeCase: return "Change case"
             case .diagnostics: return "Diagnostics…"
             case .openInputMonitoring: return "Open Input Monitoring…"
             case .openAccessibility: return "Open Accessibility…"

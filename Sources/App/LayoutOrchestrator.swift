@@ -733,16 +733,6 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         reloadSettings(settings)
     }
 
-    func changeCaseOfBufferOrSelection() {
-        let word = buffer.stringValue
-        if !word.isEmpty {
-            let toggled = ConversionEngine.toggleCase(word)
-            EventSynth.replaceCharacters(deleteCount: word.count, with: toggled)
-            buffer.clear()
-            return
-        }
-    }
-
     // MARK: - Helpers
 
     private func ensureLayoutIDs() {

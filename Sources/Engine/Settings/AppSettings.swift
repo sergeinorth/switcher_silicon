@@ -103,7 +103,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var useOptionTrigger: Bool
     public var hotkeyUndo: Hotkey
     public var hotkeyToggleAutocorrection: Hotkey
-    public var hotkeyChangeCase: Hotkey
     public var sounds: SoundMask
     public var isSoundOn: Bool
     public var soundPrefs: SoundPrefs
@@ -125,7 +124,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         useOptionTrigger: true,
         hotkeyUndo: Hotkey(keyCode: 0x33, modifiers: (1 << 20) | (1 << 19)), // Cmd+Opt+Delete placeholder
         hotkeyToggleAutocorrection: .none,
-        hotkeyChangeCase: .none,
         sounds: .all,
         isSoundOn: true,
         soundPrefs: .default,
@@ -146,7 +144,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         useOptionTrigger: Bool,
         hotkeyUndo: Hotkey,
         hotkeyToggleAutocorrection: Hotkey,
-        hotkeyChangeCase: Hotkey,
         sounds: SoundMask,
         isSoundOn: Bool,
         soundPrefs: SoundPrefs,
@@ -165,7 +162,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.useOptionTrigger = useOptionTrigger
         self.hotkeyUndo = hotkeyUndo
         self.hotkeyToggleAutocorrection = hotkeyToggleAutocorrection
-        self.hotkeyChangeCase = hotkeyChangeCase
         self.sounds = sounds
         self.isSoundOn = isSoundOn
         self.soundPrefs = soundPrefs
@@ -188,7 +184,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         useOptionTrigger = try c.decodeIfPresent(Bool.self, forKey: .useOptionTrigger) ?? d.useOptionTrigger
         hotkeyUndo = try c.decodeIfPresent(Hotkey.self, forKey: .hotkeyUndo) ?? d.hotkeyUndo
         hotkeyToggleAutocorrection = try c.decodeIfPresent(Hotkey.self, forKey: .hotkeyToggleAutocorrection) ?? d.hotkeyToggleAutocorrection
-        hotkeyChangeCase = try c.decodeIfPresent(Hotkey.self, forKey: .hotkeyChangeCase) ?? d.hotkeyChangeCase
         sounds = try c.decodeIfPresent(SoundMask.self, forKey: .sounds) ?? d.sounds
         isSoundOn = try c.decodeIfPresent(Bool.self, forKey: .isSoundOn) ?? d.isSoundOn
         soundPrefs = try c.decodeIfPresent(SoundPrefs.self, forKey: .soundPrefs) ?? d.soundPrefs

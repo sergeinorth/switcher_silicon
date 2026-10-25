@@ -25,7 +25,7 @@ Unpack, move `SwitcherSilicon.app` to `/Applications`, allow Accessibility + Inp
 - **Undo** — menu or ⌘⌥Z; Option also reverts/reapplies the last convert
 - **Sounds** — on/off plus per-event system sound picker
 - **Per-app layout memory** and **exclude current app**
-- **Change case**, **diagnostics**, Accessibility / Input Monitoring shortcuts
+- **Diagnostics**, Accessibility / Input Monitoring shortcuts
 - Menu bar title shows **РУ** / **EN** (or `!` if the event tap is down)
 
 ## Requirements

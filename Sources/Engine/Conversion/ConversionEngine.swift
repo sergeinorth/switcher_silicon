@@ -69,14 +69,6 @@ public enum ConversionEngine: Sendable {
         })
     }
 
-    public static func toggleCase(_ text: String) -> String {
-        String(text.map { ch in
-            if ch.isUppercase { return Character(ch.lowercased()) }
-            if ch.isLowercase { return Character(ch.uppercased()) }
-            return ch
-        })
-    }
-
     public enum Script: Sendable {
         case latin, cyrillic, mixed, other
     }
