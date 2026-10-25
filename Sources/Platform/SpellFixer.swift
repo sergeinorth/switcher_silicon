@@ -8,15 +8,16 @@ import Engine
 /// - RU / always: only accept fixes that land in our seed dictionary
 ///   (Apple guess ∩ seed, or phonetic / keyboard / transposition → seed)
 public struct SpellFixer: @unchecked Sendable {
-    private let validator = SystemWordValidator()
+    /// Bundled dict only on the hot path — NSSpellChecker is reserved for guesses below.
+    private let seed = SeedWordValidator()
 
     public init() {}
 
     public func suggestion(for word: String) -> String? {
         let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 4 else { return nil }
-        // Already real (full morph dict / system) — never "fix".
-        if validator.isKnownWord(trimmed) || BundledDictionary.isSpellAcceptable(trimmed) {
+        // Already real in our dicts — never "fix" (skip slow system checker here).
+        if seed.isKnownWord(trimmed) || BundledDictionary.isSpellAcceptable(trimmed) {
             return nil
         }
 
@@ -79,7 +80,7 @@ public struct SpellFixer: @unchecked Sendable {
         }
         // English: unique distance-1 Apple guess that is a known word.
         if language == "en" {
-            let known = close.filter { validator.isKnownWord($0) }
+            let known = close.filter { seed.isKnownWord($0) }
             if known.count == 1, let only = known.first, only.lowercased() != lower {
                 return only
             }

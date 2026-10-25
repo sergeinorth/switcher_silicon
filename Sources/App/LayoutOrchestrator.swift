@@ -34,6 +34,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         var immediate: Bool
         /// Cursor still on the word (no trailing space in field) — Option+Delete once.
         var useWordDelete: Bool
+        /// Space already in the field (deferred spell path).
+        var trailingSpaceInField: Bool
     }
 
     var onStatusChange: ((String) -> Void)?
@@ -245,11 +247,10 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         if settings.isAutocorrectionActive {
             let check = checker.check(word)
             lastCheckResult = "\(check) for «\(word)»"
-            AppLog.line("check \(lastCheckResult)")
+            // No AppLog here — disk I/O on the event-tap thread lags Space.
             if check == .incorrect {
                 let converted = ConversionEngine.convert(word, direction: .auto)
                 if converted != word {
-                    AppLog.line("schedule layout «\(word)» -> «\(converted)» swallow-space")
                     pendingFinishedWord = nil
                     enqueueReplacement(
                         original: word,
@@ -266,22 +267,28 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             }
         }
 
+        // Spell runs AFTER Space is delivered — NSSpellChecker must not block the key.
         if settings.isSpellAutocorrectActive {
             let spellWord = word.filter { $0.isLetter || $0 == "-" || $0 == "'" }
-            if let fixed = spellFixer.suggestion(for: spellWord), fixed != spellWord {
-                AppLog.line("spell «\(spellWord)» -> «\(fixed)» swallow-space")
-                pendingFinishedWord = nil
-                enqueueReplacement(
+            let strokes = keystrokes
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                guard let fixed = self.spellFixer.suggestion(for: spellWord), fixed != spellWord else {
+                    return
+                }
+                AppLog.line("spell «\(spellWord)» -> «\(fixed)» after-space")
+                self.pendingFinishedWord = nil
+                self.enqueueReplacement(
                     original: word,
                     converted: fixed,
-                    deleteCount: keystrokes,
+                    deleteCount: strokes + 1,
                     suffix: " ",
                     automatic: true,
                     switchLayout: false,
                     immediate: true,
-                    useWordDelete: true
+                    useWordDelete: true,
+                    trailingSpaceInField: true
                 )
-                return true
             }
         }
         return false
@@ -295,7 +302,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         automatic: Bool,
         switchLayout: Bool,
         immediate: Bool = false,
-        useWordDelete: Bool = false
+        useWordDelete: Bool = false,
+        trailingSpaceInField: Bool = false
     ) {
         replaceQueue.append(
             ReplaceJob(
@@ -306,7 +314,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                 automatic: automatic,
                 switchLayout: switchLayout,
                 immediate: immediate,
-                useWordDelete: useWordDelete
+                useWordDelete: useWordDelete,
+                trailingSpaceInField: trailingSpaceInField
             )
         )
         pumpReplaceQueue()
@@ -325,7 +334,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                 suffix: job.suffix,
                 automatic: job.automatic,
                 switchLayout: job.switchLayout,
-                useWordDelete: job.useWordDelete
+                useWordDelete: job.useWordDelete,
+                trailingSpaceInField: job.trailingSpaceInField
             )
             self.pumpReplaceQueue()
         }
@@ -455,7 +465,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         suffix: String,
         automatic: Bool,
         switchLayout: Bool,
-        useWordDelete: Bool = false
+        useWordDelete: Bool = false,
+        trailingSpaceInField: Bool = false
     ) {
         guard !isConverting else {
             replaceQueue.insert(
@@ -467,7 +478,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                     automatic: automatic,
                     switchLayout: switchLayout,
                     immediate: true,
-                    useWordDelete: useWordDelete
+                    useWordDelete: useWordDelete,
+                    trailingSpaceInField: trailingSpaceInField
                 ),
                 at: 0
             )
@@ -505,7 +517,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         EventSynth.replaceCharacters(
             deleteCount: deleteCount,
             with: converted + suffix,
-            useWordDelete: useWordDelete
+            useWordDelete: useWordDelete,
+            trailingSpaceInField: trailingSpaceInField
         )
         buffer.clear()
         pendingFinishedWord = nil

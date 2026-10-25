@@ -8,18 +8,22 @@ public enum AppLog {
         return dir.appendingPathComponent("SwitcherSilicon.log")
     }()
 
+    private static let queue = DispatchQueue(label: "com.sergei.SwitcherSilicon.log", qos: .utility)
+
     public static func line(_ message: String) {
         let stamp = ISO8601DateFormatter().string(from: Date())
         let row = "[\(stamp)] \(message)\n"
-        guard let data = row.data(using: .utf8) else { return }
-        if FileManager.default.fileExists(atPath: path.path) {
-            if let handle = try? FileHandle(forWritingTo: path) {
-                defer { try? handle.close() }
-                _ = try? handle.seekToEnd()
-                try? handle.write(contentsOf: data)
+        queue.async {
+            guard let data = row.data(using: .utf8) else { return }
+            if FileManager.default.fileExists(atPath: path.path) {
+                if let handle = try? FileHandle(forWritingTo: path) {
+                    defer { try? handle.close() }
+                    _ = try? handle.seekToEnd()
+                    try? handle.write(contentsOf: data)
+                }
+            } else {
+                try? data.write(to: path)
             }
-        } else {
-            try? data.write(to: path)
         }
     }
 }

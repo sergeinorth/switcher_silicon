@@ -47,12 +47,13 @@ public enum EventSynth {
         }
     }
 
-    /// - Parameter useWordDelete: when true (Space swallowed, cursor still on the word),
-    ///   use Option+Delete once instead of N backspaces — avoids leftover first letters.
+    /// - Parameter useWordDelete: Option+Delete once instead of N backspaces.
+    /// - Parameter trailingSpaceInField: Space already typed — remove it after the word.
     public static func replaceCharacters(
         deleteCount: Int,
         with newText: String,
-        useWordDelete: Bool = false
+        useWordDelete: Bool = false,
+        trailingSpaceInField: Bool = false
     ) {
         isSynthesizing = true
         defer {
@@ -60,12 +61,15 @@ public enum EventSynth {
             isSynthesizing = false
         }
         AppLog.line(
-            "replace delete=\(deleteCount) text=\(newText) wordDel=\(useWordDelete)"
+            "replace delete=\(deleteCount) text=\(newText) wordDel=\(useWordDelete) sp=\(trailingSpaceInField)"
         )
         // Let the last typed key commit into the target field before we erase.
         usleep(12_000)
         if useWordDelete, deleteCount > 0 {
             deleteBackwardWord()
+            if trailingSpaceInField {
+                deleteBackward(times: 1)
+            }
         } else {
             deleteBackward(times: deleteCount)
         }
