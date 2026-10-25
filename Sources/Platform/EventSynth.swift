@@ -19,7 +19,7 @@ public enum EventSynth {
         for _ in 0..<times {
             postKey(keyCode: 51, keyDown: true)
             postKey(keyCode: 51, keyDown: false)
-            usleep(1_000)
+            usleep(200)
         }
     }
 
@@ -39,12 +39,12 @@ public enum EventSynth {
     public static func replaceCharacters(deleteCount: Int, with newText: String) {
         isSynthesizing = true
         defer {
-            usleep(3_000)
+            usleep(1_500)
             isSynthesizing = false
         }
         AppLog.line("replace delete=\(deleteCount) text=\(newText)")
         deleteBackward(times: deleteCount)
-        usleep(5_000)
+        usleep(1_000)
         typeText(newText)
     }
 

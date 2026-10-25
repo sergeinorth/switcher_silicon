@@ -30,6 +30,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         var suffix: String
         var automatic: Bool
         var switchLayout: Bool
+        /// Space was swallowed — replace ASAP (no wait for key commit).
+        var immediate: Bool
     }
 
     var onStatusChange: ((String) -> Void)?
@@ -38,8 +40,9 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     init(settings: AppSettings) {
         self.settings = settings
         self.soundPlayer = SoundPlayer(settings: settings)
+        // Bundled dictionary only — NSSpellChecker is too slow on the Space hot path.
         self.checker = LayoutChecker(
-            validator: SystemWordValidator(),
+            validator: SeedWordValidator(),
             neverConvert: [],
             userRules: settings.userRules
         )
@@ -85,7 +88,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         self.settings = settings
         soundPlayer.settings = settings
         checker = LayoutChecker(
-            validator: SystemWordValidator(),
+            validator: SeedWordValidator(),
             neverConvert: undo.learnedNever,
             userRules: settings.userRules
         )
@@ -129,11 +132,12 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         // Auto-convert ONLY on Space / Tab / Enter (not on , . ; which are RU letters).
         if WordDetector.isSeparatorKeyCode(keyCode) {
             if busy {
-                // Defer: remember separator until replace finishes would be complex;
-                // just keep buffering after space by clearing — space already typed.
                 buffer.clear()
-            } else {
-                scheduleAutoConvertAfterSeparator(separatorKeyCode: keyCode)
+                return Unmanaged.passUnretained(event)
+            }
+            // Swallow Space when we convert: avoid race (first letter left behind).
+            if handleSeparatorKey(keyCode) {
+                return nil
             }
             return Unmanaged.passUnretained(event)
         }
@@ -155,7 +159,11 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     }
 
     func eventTap(didReceiveKeyUp keyCode: UInt16, flags: CGEventFlags, event: CGEvent) -> Unmanaged<CGEvent>? {
-        Unmanaged.passUnretained(event)
+        // Space keyDown was swallowed for convert — drop matching keyUp too.
+        if keyCode == 49, isConverting || EventSynth.isSynthesizing {
+            return nil
+        }
+        return Unmanaged.passUnretained(event)
     }
 
     func eventTapDidReceiveFlagsChanged(event: CGEvent) -> Unmanaged<CGEvent>? {
@@ -205,32 +213,32 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
 
     // MARK: - Conversion
 
-    private func scheduleAutoConvertAfterSeparator(separatorKeyCode: UInt16) {
+    /// Returns `true` when Space must be swallowed (we type converted word + space ourselves).
+    @discardableResult
+    private func handleSeparatorKey(_ separatorKeyCode: UInt16) -> Bool {
+        let keystrokes = buffer.count
         let word = buffer.stringValue
         buffer.clear()
         lastBufferedWord = word
-        // New word boundary — drop previous toggle target.
         undo.clearLast()
         pendingFinishedWord = word
 
         if skipNextWord {
             skipNextWord = false
             AppLog.line("skip next word after manual")
-            return
+            return false
         }
         if settings.noAutoconvertAfterTabOrEnter,
            separatorKeyCode == 48 || separatorKeyCode == 36 || separatorKeyCode == 76
         {
-            return
+            return false
         }
-        guard word.count >= 2 else {
+        guard keystrokes >= 2, word.count >= 2 else {
             AppLog.line("word too short «\(word)»")
-            return
+            return false
         }
-        guard separatorKeyCode == 49 else { return }
-
-        let sep = " "
-        let deleteCount = word.count + 1
+        // Reliable replace only on Space.
+        guard separatorKeyCode == 49 else { return false }
 
         if settings.isAutocorrectionActive {
             let check = checker.check(word)
@@ -239,17 +247,18 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             if check == .incorrect {
                 let converted = ConversionEngine.convert(word, direction: .auto)
                 if converted != word {
-                    AppLog.line("schedule layout «\(word)» -> «\(converted)»")
+                    AppLog.line("schedule layout «\(word)» -> «\(converted)» swallow-space")
                     pendingFinishedWord = nil
                     enqueueReplacement(
                         original: word,
                         converted: converted,
-                        deleteCount: deleteCount,
-                        suffix: sep,
+                        deleteCount: keystrokes, // space not typed yet
+                        suffix: " ",
                         automatic: true,
-                        switchLayout: true
+                        switchLayout: true,
+                        immediate: true
                     )
-                    return
+                    return true
                 }
             }
         }
@@ -257,18 +266,21 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         if settings.isSpellAutocorrectActive {
             let spellWord = word.filter { $0.isLetter || $0 == "-" || $0 == "'" }
             if let fixed = spellFixer.suggestion(for: spellWord), fixed != spellWord {
-                AppLog.line("spell «\(spellWord)» -> «\(fixed)»")
+                AppLog.line("spell «\(spellWord)» -> «\(fixed)» swallow-space")
                 pendingFinishedWord = nil
                 enqueueReplacement(
                     original: word,
                     converted: fixed,
-                    deleteCount: deleteCount,
-                    suffix: sep,
+                    deleteCount: keystrokes,
+                    suffix: " ",
                     automatic: true,
-                    switchLayout: false
+                    switchLayout: false,
+                    immediate: true
                 )
+                return true
             }
         }
+        return false
     }
 
     private func enqueueReplacement(
@@ -277,7 +289,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         deleteCount: Int,
         suffix: String,
         automatic: Bool,
-        switchLayout: Bool
+        switchLayout: Bool,
+        immediate: Bool = false
     ) {
         replaceQueue.append(
             ReplaceJob(
@@ -286,7 +299,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                 deleteCount: deleteCount,
                 suffix: suffix,
                 automatic: automatic,
-                switchLayout: switchLayout
+                switchLayout: switchLayout,
+                immediate: immediate
             )
         )
         pumpReplaceQueue()
@@ -295,8 +309,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     private func pumpReplaceQueue() {
         guard !isConverting, !replaceQueue.isEmpty else { return }
         let job = replaceQueue.removeFirst()
-        // Let the space key commit in the target app first.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) { [weak self] in
+        let delay = job.immediate ? 0.0 : 0.03
+        let run = { [weak self] in
             guard let self else { return }
             self.performReplacement(
                 original: job.original,
@@ -307,6 +321,11 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                 switchLayout: job.switchLayout
             )
             self.pumpReplaceQueue()
+        }
+        if delay <= 0 {
+            DispatchQueue.main.async(execute: run)
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: run)
         }
     }
 
@@ -431,7 +450,6 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         switchLayout: Bool
     ) {
         guard !isConverting else {
-            // Re-queue if somehow overlapping.
             replaceQueue.insert(
                 ReplaceJob(
                     original: original,
@@ -439,7 +457,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                     deleteCount: deleteCount,
                     suffix: suffix,
                     automatic: automatic,
-                    switchLayout: switchLayout
+                    switchLayout: switchLayout,
+                    immediate: true
                 ),
                 at: 0
             )
@@ -469,15 +488,15 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                 _ = inputSources.switchToEnglish(preferredID: settings.englishLayoutID)
                 soundPlayer.play(automatic ? .autoConvert : .switchToEnglish)
             }
+            usleep(8_000)
         } else {
             soundPlayer.play(.autoConvert)
         }
 
-        usleep(20_000)
         EventSynth.replaceCharacters(deleteCount: deleteCount, with: converted + suffix)
         buffer.clear()
         pendingFinishedWord = nil
-        AppLog.line("replaced «\(original)» -> «\(converted)» auto=\(automatic)")
+        AppLog.line("replaced «\(original)» -> «\(converted)» auto=\(automatic) del=\(deleteCount)")
         onStatusChange?(automatic ? "auto:\(converted)" : "manual:\(converted)")
     }
 
@@ -620,7 +639,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         applySnapshot(last, showConverted: false)
         undo.learnNever(last.original)
         checker = LayoutChecker(
-            validator: SystemWordValidator(),
+            validator: SeedWordValidator(),
             neverConvert: undo.learnedNever,
             userRules: settings.userRules
         )
