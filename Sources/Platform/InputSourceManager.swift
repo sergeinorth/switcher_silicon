@@ -6,7 +6,7 @@ public final class InputSourceManager: @unchecked Sendable {
     public init() {}
 
     /// Fires on the main queue when the user (or we) change the keyboard layout.
-    public func observeLayoutChanges(_ handler: @escaping () -> Void) {
+    public func observeLayoutChanges(_ handler: @escaping @Sendable () -> Void) {
         DistributedNotificationCenter.default.addObserver(
             forName: NSNotification.Name("com.apple.Carbon.TISNotifySelectedKeyboardInputSourceChanged"),
             object: nil,
