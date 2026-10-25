@@ -252,17 +252,20 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             }
         }
 
-        if settings.isSpellAutocorrectActive, let fixed = spellFixer.suggestion(for: word), fixed != word {
-            AppLog.line("spell «\(word)» -> «\(fixed)»")
-            pendingFinishedWord = nil
-            enqueueReplacement(
-                original: word,
-                converted: fixed,
-                deleteCount: deleteCount,
-                suffix: sep,
-                automatic: true,
-                switchLayout: false
-            )
+        if settings.isSpellAutocorrectActive {
+            let spellWord = word.filter { $0.isLetter || $0 == "-" || $0 == "'" }
+            if let fixed = spellFixer.suggestion(for: spellWord), fixed != spellWord {
+                AppLog.line("spell «\(spellWord)» -> «\(fixed)»")
+                pendingFinishedWord = nil
+                enqueueReplacement(
+                    original: word,
+                    converted: fixed,
+                    deleteCount: deleteCount,
+                    suffix: sep,
+                    automatic: true,
+                    switchLayout: false
+                )
+            }
         }
     }
 

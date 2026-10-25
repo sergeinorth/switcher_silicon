@@ -21,7 +21,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "Smoke",
-            dependencies: ["Engine"],
+            dependencies: ["Engine", "Platform"],
             path: "Sources/Smoke"
         ),
         // XCTest / Testing require full Xcode; use `swift run Smoke` with CLT.

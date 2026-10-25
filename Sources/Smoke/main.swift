@@ -1,5 +1,6 @@
 import Engine
 import Foundation
+import Platform
 
 func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
     if !condition() {
@@ -19,6 +20,16 @@ expect(ConversionEngine.toggleCase("Привет") == "пРИВЕТ", "toggle ca
 expect(ConversionEngine.flipLayout("ghbdtn ,hfn") == "привет брат", "flip selection phrase")
 expect(ConversionEngine.flipLayout("привет брат") == "ghbdtn ,hfn", "flip selection back")
 expect(ConversionEngine.flipLayout("Ghbdtn!") == "Привет!", "flip keeps punctuation")
+expect(EditDistance.between("превет", "привет", limit: 1) == 1, "edit distance превет")
+expect(EditDistance.between("ощибок", "ошибок", limit: 1) == 1, "edit distance ощибок")
+
+let spell = SpellFixer()
+expect(spell.suggestion(for: "превет") == "привет", "spell превет")
+expect(spell.suggestion(for: "ощибок") == "ошибок", "spell ощибок")
+expect(spell.suggestion(for: "привет") == nil, "spell skip known")
+expect(spell.suggestion(for: "helllo") == "hello", "spell helllo")
+expect(spell.suggestion(for: "автоконвертация") == nil, "spell skip compound junk")
+expect(spell.suggestion(for: "прпревет") == nil, "spell skip ambiguous")
 
 let checker = LayoutChecker()
 expect(checker.check("ghbdtn") == .incorrect, "checker ghbdtn")
