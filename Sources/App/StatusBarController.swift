@@ -107,6 +107,14 @@ final class StatusBarController {
         autoItem.target = self
         menu.addItem(autoItem)
 
+        let spellItem = NSMenuItem(
+            title: settings.isSpellAutocorrectActive ? "Автоопечатки: вкл" : "Автоопечатки: выкл",
+            action: #selector(toggleSpell),
+            keyEquivalent: ""
+        )
+        spellItem.target = self
+        menu.addItem(spellItem)
+
         let soundItem = NSMenuItem(
             title: settings.isSoundOn ? "Звуки: вкл" : "Звуки: выкл",
             action: #selector(toggleSound),
@@ -225,6 +233,11 @@ final class StatusBarController {
 
     @objc private func toggleAuto() {
         settings.isAutocorrectionActive.toggle()
+        persist()
+    }
+
+    @objc private func toggleSpell() {
+        settings.isSpellAutocorrectActive.toggle()
         persist()
     }
 

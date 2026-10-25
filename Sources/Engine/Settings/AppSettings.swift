@@ -88,6 +88,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var isSoundOn: Bool
     public var soundPrefs: SoundPrefs
     public var isAutocorrectionActive: Bool
+    /// Typo autocorrect (превет→привет). Off by default — conservative.
+    public var isSpellAutocorrectActive: Bool
     public var cancelNextWordAfterManualSwitch: Bool
     public var noAutoconvertAfterTabOrEnter: Bool
     public var rememberLayoutPerApp: Bool
@@ -106,6 +108,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         isSoundOn: true,
         soundPrefs: .default,
         isAutocorrectionActive: true,
+        isSpellAutocorrectActive: false,
         cancelNextWordAfterManualSwitch: true,
         noAutoconvertAfterTabOrEnter: false,
         rememberLayoutPerApp: true,
@@ -125,6 +128,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         isSoundOn: Bool,
         soundPrefs: SoundPrefs,
         isAutocorrectionActive: Bool,
+        isSpellAutocorrectActive: Bool,
         cancelNextWordAfterManualSwitch: Bool,
         noAutoconvertAfterTabOrEnter: Bool,
         rememberLayoutPerApp: Bool,
@@ -142,6 +146,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.isSoundOn = isSoundOn
         self.soundPrefs = soundPrefs
         self.isAutocorrectionActive = isAutocorrectionActive
+        self.isSpellAutocorrectActive = isSpellAutocorrectActive
         self.cancelNextWordAfterManualSwitch = cancelNextWordAfterManualSwitch
         self.noAutoconvertAfterTabOrEnter = noAutoconvertAfterTabOrEnter
         self.rememberLayoutPerApp = rememberLayoutPerApp
@@ -163,6 +168,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         isSoundOn = try c.decodeIfPresent(Bool.self, forKey: .isSoundOn) ?? d.isSoundOn
         soundPrefs = try c.decodeIfPresent(SoundPrefs.self, forKey: .soundPrefs) ?? d.soundPrefs
         isAutocorrectionActive = try c.decodeIfPresent(Bool.self, forKey: .isAutocorrectionActive) ?? d.isAutocorrectionActive
+        isSpellAutocorrectActive = try c.decodeIfPresent(Bool.self, forKey: .isSpellAutocorrectActive) ?? d.isSpellAutocorrectActive
         cancelNextWordAfterManualSwitch = try c.decodeIfPresent(Bool.self, forKey: .cancelNextWordAfterManualSwitch) ?? d.cancelNextWordAfterManualSwitch
         noAutoconvertAfterTabOrEnter = try c.decodeIfPresent(Bool.self, forKey: .noAutoconvertAfterTabOrEnter) ?? d.noAutoconvertAfterTabOrEnter
         rememberLayoutPerApp = try c.decodeIfPresent(Bool.self, forKey: .rememberLayoutPerApp) ?? d.rememberLayoutPerApp

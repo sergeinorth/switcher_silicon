@@ -8,6 +8,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     private var soundPlayer: SoundPlayer
     private var settings: AppSettings
     private var checker: LayoutChecker
+    private let spellFixer = SpellFixer()
     private var buffer = KeyStrokeBuffer()
     private var undo = UndoState()
     private var skipNextWord = false
@@ -16,7 +17,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     private var isConverting = false
     private var conversionGeneration = 0
     private var lastBufferedWord = ""
-    /// Word completed by Space; valid only until the user types the next glyph.
+    /// Word completed by Space; valid until next glyph (for forced Option convert).
     private var pendingFinishedWord: String?
     private var lastCheckResult = "—"
     private var keyEventCount = 0
@@ -132,8 +133,9 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
 
         let shift = flags.contains(.maskShift)
         if let glyph = resolvedGlyph(characters: characters, keyCode: keyCode, shift: shift) {
-            // New typing invalidates "word after space" Option target.
+            // New typing: don't Option-revert an old auto word into the new text.
             pendingFinishedWord = nil
+            undo.clearLast()
             buffer.append(KeyStroke(characters: glyph, keyCode: keyCode))
             lastBufferedWord = buffer.stringValue
         }
@@ -194,14 +196,11 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         let word = buffer.stringValue
         buffer.clear()
         lastBufferedWord = word
+        pendingFinishedWord = word
 
         if skipNextWord {
             skipNextWord = false
             AppLog.line("skip next word after manual")
-            return
-        }
-        guard settings.isAutocorrectionActive else {
-            AppLog.line("auto off, word=\(word)")
             return
         }
         if settings.noAutoconvertAfterTabOrEnter,
@@ -209,63 +208,97 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         {
             return
         }
-        pendingFinishedWord = word
         guard word.count >= 2 else {
             AppLog.line("word too short «\(word)»")
             return
         }
-        let check = checker.check(word)
-        lastCheckResult = "\(check) for «\(word)»"
-        AppLog.line("check \(lastCheckResult)")
-        guard check == .incorrect else { return }
+        // Auto layout / spell only on Space for reliable replace.
+        guard separatorKeyCode == 49 else { return }
 
-        let converted = ConversionEngine.convert(word, direction: .auto)
-        guard converted != word else { return }
-        AppLog.line("schedule convert «\(word)» -> «\(converted)»")
+        let sep = " "
+        let deleteCount = word.count + 1
 
-        let sep = WordDetector.separatorString(forKeyCode: separatorKeyCode)
-        // For Return/Tab, deleting a newline/tab by character count is unreliable —
-        // only auto-replace on Space for now; still switch layout? Skip non-space.
-        guard separatorKeyCode == 49 else {
-            // Tab/Enter: convert word only (no sep in delete count); sep already typed.
-            conversionGeneration += 1
-            let generation = conversionGeneration
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-                guard let self, generation == self.conversionGeneration else { return }
-                // Cursor is after newline; deleteCount = word only won't remove newline.
-                // Move: not handled — require Space for auto. Manual Option still works.
+        // 1) Layout fix
+        if settings.isAutocorrectionActive {
+            let check = checker.check(word)
+            lastCheckResult = "\(check) for «\(word)»"
+            AppLog.line("check \(lastCheckResult)")
+            if check == .incorrect {
+                let converted = ConversionEngine.convert(word, direction: .auto)
+                if converted != word {
+                    pendingFinishedWord = nil
+                    scheduleReplacement(
+                        original: word,
+                        converted: converted,
+                        deleteCount: deleteCount,
+                        suffix: sep,
+                        automatic: true,
+                        switchLayout: true
+                    )
+                    return
+                }
             }
-            return
         }
 
-        conversionGeneration += 1
-        let generation = conversionGeneration
-        let deleteCount = word.count + 1 // word + space
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            guard let self else { return }
-            guard generation == self.conversionGeneration else { return }
-            self.performReplacement(
+        // 2) Conservative typo fix (off by default)
+        if settings.isSpellAutocorrectActive, let fixed = spellFixer.suggestion(for: word), fixed != word {
+            AppLog.line("spell «\(word)» -> «\(fixed)»")
+            pendingFinishedWord = nil
+            scheduleReplacement(
                 original: word,
-                converted: converted,
+                converted: fixed,
                 deleteCount: deleteCount,
                 suffix: sep,
-                manual: false
+                automatic: true,
+                switchLayout: false
             )
         }
     }
 
+    private func scheduleReplacement(
+        original: String,
+        converted: String,
+        deleteCount: Int,
+        suffix: String,
+        automatic: Bool,
+        switchLayout: Bool
+    ) {
+        conversionGeneration += 1
+        let generation = conversionGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self, generation == self.conversionGeneration else { return }
+            self.performReplacement(
+                original: original,
+                converted: converted,
+                deleteCount: deleteCount,
+                suffix: suffix,
+                automatic: automatic,
+                switchLayout: switchLayout
+            )
+        }
+    }
+
+    /// Option: force-convert current/pending word; if the last change was automatic — revert it.
     private func convertLastWord(manual: Bool) {
         guard !isConverting else {
             AppLog.line("option ignored: busy converting")
             return
         }
 
-        // 1) Live buffer (word typed, no space yet) — main Option case.
-        // 2) pendingFinishedWord — only right after Space, before next glyph.
-        // Never fall back to clipboard: Cmd+C with no selection reused old pasteboard text
-        // (wrong sound + inserted a previous word).
         let fromBuffer = buffer.stringValue
+
+        // After auto-convert (buffer empty): Option restores the previous word.
+        if fromBuffer.isEmpty,
+           pendingFinishedWord == nil,
+           let last = undo.last,
+           last.wasAutomatic,
+           last.showingConverted
+        {
+            AppLog.line("option revert auto «\(last.converted)» -> «\(last.original)»")
+            revertAutomaticConversion(last)
+            return
+        }
+
         let word: String
         let deleteCount: Int
         let suffix: String
@@ -277,12 +310,12 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             pendingFinishedWord = nil
         } else if let finished = pendingFinishedWord, finished.count >= 1 {
             word = finished
-            deleteCount = Array(word).count + 1 // word + space
+            deleteCount = Array(word).count + 1
             suffix = " "
             pendingFinishedWord = nil
         } else {
             AppLog.line("option: nothing to convert")
-            soundPlayer.play(.undo) // audible "miss"
+            soundPlayer.play(.undo)
             return
         }
 
@@ -299,8 +332,40 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             converted: converted,
             deleteCount: deleteCount,
             suffix: suffix,
-            manual: true
+            automatic: false,
+            switchLayout: true
         )
+    }
+
+    private func revertAutomaticConversion(_ last: ConversionSnapshot) {
+        isConverting = true
+        defer { isConverting = false }
+
+        let space = last.hadTrailingSpace
+        let deleteCount = Array(last.converted).count + (space ? 1 : 0)
+        let restore = last.original + (space ? " " : "")
+
+        // Restore layout that matched the original mistype.
+        switch ConversionEngine.dominantScript(last.original) {
+        case .latin:
+            _ = inputSources.switchToEnglish(preferredID: settings.englishLayoutID)
+        case .cyrillic:
+            _ = inputSources.switchToRussian(preferredID: settings.russianLayoutID)
+        case .mixed, .other:
+            break
+        }
+
+        soundPlayer.play(.undo)
+        usleep(15_000)
+        EventSynth.replaceCharacters(deleteCount: deleteCount, with: restore)
+
+        var updated = last
+        updated.showingConverted = false
+        undo.remember(updated)
+        // Allow Option to force-convert again (same as pending word after space).
+        pendingFinishedWord = last.original
+        buffer.clear()
+        onStatusChange?("revert:\(last.original)")
     }
 
     private func performReplacement(
@@ -308,7 +373,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         converted: String,
         deleteCount: Int,
         suffix: String,
-        manual: Bool
+        automatic: Bool,
+        switchLayout: Bool
     ) {
         guard !isConverting else { return }
         isConverting = true
@@ -316,25 +382,34 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
 
         let toRussian = ConversionEngine.dominantScript(original) == .latin
             || ConversionEngine.dominantScript(converted) == .cyrillic
+        let hadSpace = suffix == " "
 
         undo.remember(ConversionSnapshot(
             original: original,
             converted: converted,
-            switchedToRussian: toRussian
+            switchedToRussian: switchLayout && toRussian,
+            hadTrailingSpace: hadSpace,
+            wasAutomatic: automatic,
+            showingConverted: true
         ))
 
-        if toRussian {
-            _ = inputSources.switchToRussian(preferredID: settings.russianLayoutID)
-            soundPlayer.play(manual ? .switchToRussian : .autoConvert)
+        if switchLayout {
+            if toRussian {
+                _ = inputSources.switchToRussian(preferredID: settings.russianLayoutID)
+                soundPlayer.play(automatic ? .autoConvert : .switchToRussian)
+            } else {
+                _ = inputSources.switchToEnglish(preferredID: settings.englishLayoutID)
+                soundPlayer.play(automatic ? .autoConvert : .switchToEnglish)
+            }
         } else {
-            _ = inputSources.switchToEnglish(preferredID: settings.englishLayoutID)
-            soundPlayer.play(manual ? .switchToEnglish : .autoConvert)
+            soundPlayer.play(.autoConvert)
         }
 
         usleep(20_000)
         EventSynth.replaceCharacters(deleteCount: deleteCount, with: converted + suffix)
         buffer.clear()
-        onStatusChange?(manual ? "manual:\(converted)" : "auto:\(converted)")
+        pendingFinishedWord = nil
+        onStatusChange?(automatic ? "auto:\(converted)" : "manual:\(converted)")
     }
 
     private func convertSelectionIfAny() {
@@ -388,21 +463,20 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     }
 
     func undoLastConversion() {
-        guard let last = undo.last, !isConverting else { return }
-        EventSynth.replaceCharacters(deleteCount: last.converted.count, with: last.original)
-        if last.switchedToRussian {
-            _ = inputSources.switchToEnglish(preferredID: settings.englishLayoutID)
-        } else {
-            _ = inputSources.switchToRussian(preferredID: settings.russianLayoutID)
-        }
-        soundPlayer.play(.undo)
+        guard let last = undo.last, last.showingConverted, !isConverting else { return }
+        revertAutomaticConversion(last)
+        // Menu undo also learns "don't auto this original again".
         undo.learnNever(last.original)
         checker = LayoutChecker(
             validator: SystemWordValidator(),
             neverConvert: undo.learnedNever,
             userRules: settings.userRules
         )
-        undo.clearLast()
+    }
+
+    func toggleSpellAutocorrect() {
+        settings.isSpellAutocorrectActive.toggle()
+        reloadSettings(settings)
     }
 
     func changeCaseOfBufferOrSelection() {
