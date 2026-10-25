@@ -1,5 +1,6 @@
 import AppKit
 import Engine
+import Platform
 import ServiceManagement
 
 @MainActor
@@ -11,44 +12,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
+        AppLog.line("launch path=\(Bundle.main.bundlePath)")
+        AppLog.line("AX trusted=\(AccessibilityPermission.isTrusted)")
+
         let settings = SettingsStore.load()
         orchestrator = LayoutOrchestrator(settings: settings)
         statusBar = StatusBarController(orchestrator: orchestrator)
 
-        if !AccessibilityPermission.isTrusted {
+        if AccessibilityPermission.isTrusted {
+            let ok = orchestrator.start()
+            AppLog.line("tap started=\(ok)")
+        } else {
+            AppLog.line("AX missing — prompting")
             AccessibilityPermission.promptIfNeeded()
             showPermissionAlert()
-            permissionTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
                 Task { @MainActor in
                     self?.tryStartWhenTrusted()
                 }
             }
-        } else {
-            _ = orchestrator.start()
         }
 
-        configureLaunchAtLogin(settings.launchesOnStartup)
+        // Login items are flaky for ad-hoc apps — keep off unless it already works.
+        if settings.launchesOnStartup {
+            configureLaunchAtLogin(true)
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        AppLog.line("terminate")
         orchestrator?.stop()
         permissionTimer?.invalidate()
     }
 
     private func tryStartWhenTrusted() {
-        guard AccessibilityPermission.isTrusted else { return }
+        let trusted = AccessibilityPermission.isTrusted
+        AppLog.line("poll AX trusted=\(trusted)")
+        guard trusted else { return }
         permissionTimer?.invalidate()
         permissionTimer = nil
-        _ = orchestrator.start()
+        let ok = orchestrator.start()
+        AppLog.line("tap started after AX=\(ok)")
     }
 
     private func showPermissionAlert() {
         let alert = NSAlert()
         alert.messageText = "Нужен доступ к Универсальному доступу"
         alert.informativeText = """
-        Switcher Silicon перехватывает клавиатуру, чтобы чинить слова, набранные в неверной раскладке.
+        Switcher Silicon должен быть в списке и включён.
 
-        Системные настройки → Конфиденциальность и безопасность → Универсальный доступ → включи SwitcherSilicon.
+        1. Открой Универсальный доступ
+        2. Выключи SwitcherSilicon и включи снова
+        3. Если пунктов несколько — оставь только /Applications/SwitcherSilicon.app
+
+        Caramba искать не нужно, если её нет в списке.
         """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Открыть настройки")
@@ -67,7 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try SMAppService.mainApp.unregister()
             }
         } catch {
-            // Login item may fail for unpackaged debug binaries — ignore in MVP.
+            AppLog.line("login item error: \(error)")
         }
     }
 }
