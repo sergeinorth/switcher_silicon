@@ -136,7 +136,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         rememberLayoutPerApp: true,
         excludedApps: [],
         userRules: [],
-        launchesOnStartup: true,
+        launchesOnStartup: false,
         uiLanguage: .systemDefault
     )
 

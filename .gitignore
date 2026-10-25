@@ -7,3 +7,5 @@ xcuserdata/
 *.app
 signing/
 dist/
+Resources/AppIcon.iconset/
+dist/
