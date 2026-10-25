@@ -7,6 +7,7 @@ final class StatusBarController {
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let orchestrator: LayoutOrchestrator
     private let inputSources = InputSourceManager()
+    private let previewPlayer: SoundPlayer
     private var settings: AppSettings
     private var flashToken = 0
     private var layoutPoll: Timer?
@@ -15,6 +16,7 @@ final class StatusBarController {
     init(orchestrator: LayoutOrchestrator) {
         self.orchestrator = orchestrator
         self.settings = orchestrator.currentSettings
+        self.previewPlayer = SoundPlayer(settings: orchestrator.currentSettings)
         if let button = item.button {
             button.toolTip = "Switcher Silicon"
         }
@@ -25,7 +27,6 @@ final class StatusBarController {
                 self?.refreshLayoutTitle()
             }
         }
-        // Notifications are flaky ~1/5 — poll as source of truth.
         layoutPoll = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.refreshLayoutTitle()
@@ -45,7 +46,6 @@ final class StatusBarController {
     }
 
     private func layoutTitle() -> String {
-        // Real readiness = event tap is up. AXIsProcessTrusted alone is unreliable for ad-hoc builds.
         if !orchestrator.isTapActive { return "!" }
         return inputSources.isCurrentRussian ? "РУ" : "EN"
     }
@@ -59,6 +59,11 @@ final class StatusBarController {
 
     private func rebuildMenu() {
         let menu = NSMenu()
+
+        let titleItem = NSMenuItem(title: "Switcher Silicon", action: nil, keyEquivalent: "")
+        titleItem.isEnabled = false
+        menu.addItem(titleItem)
+        menu.addItem(.separator())
 
         let layoutItem = NSMenuItem(
             title: "Раскладка: \(inputSources.isCurrentRussian ? "РУ" : "EN")",
@@ -110,6 +115,10 @@ final class StatusBarController {
         soundItem.target = self
         menu.addItem(soundItem)
 
+        let soundsMenu = NSMenuItem(title: "Выбор звуков", action: nil, keyEquivalent: "")
+        soundsMenu.submenu = buildSoundsSubmenu()
+        menu.addItem(soundsMenu)
+
         menu.addItem(.separator())
 
         let undoItem = NSMenuItem(title: "Отменить последнюю конвертацию", action: #selector(undo), keyEquivalent: "z")
@@ -148,6 +157,54 @@ final class StatusBarController {
         item.menu = menu
     }
 
+    private func buildSoundsSubmenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(soundRoleMenu(
+            title: "На русский",
+            current: settings.soundPrefs.switchToRussian,
+            role: "russian"
+        ))
+        menu.addItem(soundRoleMenu(
+            title: "На английский",
+            current: settings.soundPrefs.switchToEnglish,
+            role: "english"
+        ))
+        menu.addItem(soundRoleMenu(
+            title: "Автоконвертация",
+            current: settings.soundPrefs.autoConvert,
+            role: "auto"
+        ))
+        menu.addItem(soundRoleMenu(
+            title: "Отмена / промах",
+            current: settings.soundPrefs.undo,
+            role: "undo"
+        ))
+        menu.addItem(soundRoleMenu(
+            title: "Выделение",
+            current: settings.soundPrefs.selectionConvert,
+            role: "selection"
+        ))
+        menu.addItem(.separator())
+        let reset = NSMenuItem(title: "Сбросить по умолчанию", action: #selector(resetSounds), keyEquivalent: "")
+        reset.target = self
+        menu.addItem(reset)
+        return menu
+    }
+
+    private func soundRoleMenu(title: String, current: String, role: String) -> NSMenuItem {
+        let item = NSMenuItem(title: "\(title): \(current)", action: nil, keyEquivalent: "")
+        let sub = NSMenu()
+        for name in SoundPrefs.catalog {
+            let opt = NSMenuItem(title: name, action: #selector(selectSound(_:)), keyEquivalent: "")
+            opt.target = self
+            opt.representedObject = "\(role)|\(name)"
+            opt.state = (name == current) ? .on : .off
+            sub.addItem(opt)
+        }
+        item.submenu = sub
+        return item
+    }
+
     private func reflectStatus(_ status: String) {
         if status.hasPrefix("auto:") || status.hasPrefix("manual:") {
             flashToken += 1
@@ -163,21 +220,47 @@ final class StatusBarController {
             lastTitle = ""
             refreshLayoutTitle()
         }
-        // Refresh diagnostic labels next open.
         rebuildMenu()
     }
 
     @objc private func toggleAuto() {
         settings.isAutocorrectionActive.toggle()
-        orchestrator.reloadSettings(settings)
-        settings = orchestrator.currentSettings
-        rebuildMenu()
+        persist()
     }
 
     @objc private func toggleSound() {
         settings.isSoundOn.toggle()
+        persist()
+    }
+
+    @objc private func selectSound(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String else { return }
+        let parts = raw.split(separator: "|", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return }
+        let role = parts[0]
+        let name = parts[1]
+        switch role {
+        case "russian": settings.soundPrefs.switchToRussian = name
+        case "english": settings.soundPrefs.switchToEnglish = name
+        case "auto": settings.soundPrefs.autoConvert = name
+        case "undo": settings.soundPrefs.undo = name
+        case "selection": settings.soundPrefs.selectionConvert = name
+        default: return
+        }
+        previewPlayer.settings = settings
+        previewPlayer.preview(named: name)
+        persist()
+    }
+
+    @objc private func resetSounds() {
+        settings.soundPrefs = .default
+        persist()
+    }
+
+    private func persist() {
         orchestrator.reloadSettings(settings)
         settings = orchestrator.currentSettings
+        previewPlayer.settings = settings
         rebuildMenu()
     }
 
@@ -216,8 +299,7 @@ final class StatusBarController {
         guard let bundle = FrontmostApp.bundleID else { return }
         if !settings.excludedApps.contains(bundle) {
             settings.excludedApps.append(bundle)
-            orchestrator.reloadSettings(settings)
-            settings = orchestrator.currentSettings
+            persist()
         }
     }
 

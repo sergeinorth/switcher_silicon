@@ -56,6 +56,27 @@ public struct UserRule: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+public struct SoundPrefs: Codable, Equatable, Sendable {
+    public var switchToRussian: String
+    public var switchToEnglish: String
+    public var autoConvert: String
+    public var undo: String
+    public var selectionConvert: String
+
+    public static let `default` = SoundPrefs(
+        switchToRussian: "Tink",
+        switchToEnglish: "Pop",
+        autoConvert: "Glass",
+        undo: "Bottle",
+        selectionConvert: "Purr"
+    )
+
+    public static let catalog: [String] = [
+        "Basso", "Blow", "Bottle", "Frog", "Funk", "Glass", "Hero",
+        "Morse", "Ping", "Pop", "Purr", "Sosumi", "Submarine", "Tink",
+    ]
+}
+
 public struct AppSettings: Codable, Equatable, Sendable {
     public var russianLayoutID: String
     public var englishLayoutID: String
@@ -65,6 +86,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var hotkeyChangeCase: Hotkey
     public var sounds: SoundMask
     public var isSoundOn: Bool
+    public var soundPrefs: SoundPrefs
     public var isAutocorrectionActive: Bool
     public var cancelNextWordAfterManualSwitch: Bool
     public var noAutoconvertAfterTabOrEnter: Bool
@@ -82,6 +104,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         hotkeyChangeCase: .none,
         sounds: .all,
         isSoundOn: true,
+        soundPrefs: .default,
         isAutocorrectionActive: true,
         cancelNextWordAfterManualSwitch: true,
         noAutoconvertAfterTabOrEnter: false,
@@ -90,6 +113,63 @@ public struct AppSettings: Codable, Equatable, Sendable {
         userRules: [],
         launchesOnStartup: true
     )
+
+    public init(
+        russianLayoutID: String,
+        englishLayoutID: String,
+        useOptionTrigger: Bool,
+        hotkeyUndo: Hotkey,
+        hotkeyToggleAutocorrection: Hotkey,
+        hotkeyChangeCase: Hotkey,
+        sounds: SoundMask,
+        isSoundOn: Bool,
+        soundPrefs: SoundPrefs,
+        isAutocorrectionActive: Bool,
+        cancelNextWordAfterManualSwitch: Bool,
+        noAutoconvertAfterTabOrEnter: Bool,
+        rememberLayoutPerApp: Bool,
+        excludedApps: [String],
+        userRules: [UserRule],
+        launchesOnStartup: Bool
+    ) {
+        self.russianLayoutID = russianLayoutID
+        self.englishLayoutID = englishLayoutID
+        self.useOptionTrigger = useOptionTrigger
+        self.hotkeyUndo = hotkeyUndo
+        self.hotkeyToggleAutocorrection = hotkeyToggleAutocorrection
+        self.hotkeyChangeCase = hotkeyChangeCase
+        self.sounds = sounds
+        self.isSoundOn = isSoundOn
+        self.soundPrefs = soundPrefs
+        self.isAutocorrectionActive = isAutocorrectionActive
+        self.cancelNextWordAfterManualSwitch = cancelNextWordAfterManualSwitch
+        self.noAutoconvertAfterTabOrEnter = noAutoconvertAfterTabOrEnter
+        self.rememberLayoutPerApp = rememberLayoutPerApp
+        self.excludedApps = excludedApps
+        self.userRules = userRules
+        self.launchesOnStartup = launchesOnStartup
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = AppSettings.default
+        russianLayoutID = try c.decodeIfPresent(String.self, forKey: .russianLayoutID) ?? d.russianLayoutID
+        englishLayoutID = try c.decodeIfPresent(String.self, forKey: .englishLayoutID) ?? d.englishLayoutID
+        useOptionTrigger = try c.decodeIfPresent(Bool.self, forKey: .useOptionTrigger) ?? d.useOptionTrigger
+        hotkeyUndo = try c.decodeIfPresent(Hotkey.self, forKey: .hotkeyUndo) ?? d.hotkeyUndo
+        hotkeyToggleAutocorrection = try c.decodeIfPresent(Hotkey.self, forKey: .hotkeyToggleAutocorrection) ?? d.hotkeyToggleAutocorrection
+        hotkeyChangeCase = try c.decodeIfPresent(Hotkey.self, forKey: .hotkeyChangeCase) ?? d.hotkeyChangeCase
+        sounds = try c.decodeIfPresent(SoundMask.self, forKey: .sounds) ?? d.sounds
+        isSoundOn = try c.decodeIfPresent(Bool.self, forKey: .isSoundOn) ?? d.isSoundOn
+        soundPrefs = try c.decodeIfPresent(SoundPrefs.self, forKey: .soundPrefs) ?? d.soundPrefs
+        isAutocorrectionActive = try c.decodeIfPresent(Bool.self, forKey: .isAutocorrectionActive) ?? d.isAutocorrectionActive
+        cancelNextWordAfterManualSwitch = try c.decodeIfPresent(Bool.self, forKey: .cancelNextWordAfterManualSwitch) ?? d.cancelNextWordAfterManualSwitch
+        noAutoconvertAfterTabOrEnter = try c.decodeIfPresent(Bool.self, forKey: .noAutoconvertAfterTabOrEnter) ?? d.noAutoconvertAfterTabOrEnter
+        rememberLayoutPerApp = try c.decodeIfPresent(Bool.self, forKey: .rememberLayoutPerApp) ?? d.rememberLayoutPerApp
+        excludedApps = try c.decodeIfPresent([String].self, forKey: .excludedApps) ?? d.excludedApps
+        userRules = try c.decodeIfPresent([UserRule].self, forKey: .userRules) ?? d.userRules
+        launchesOnStartup = try c.decodeIfPresent(Bool.self, forKey: .launchesOnStartup) ?? d.launchesOnStartup
+    }
 }
 
 public enum SettingsStore {
