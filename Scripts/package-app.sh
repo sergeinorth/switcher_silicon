@@ -67,6 +67,17 @@ fi
 sign_app "$INSTALL_APP"
 xattr -cr "$INSTALL_APP" 2>/dev/null || true
 
+
+# Stamp Finder icon (NSWorkspace) — more reliable than icns alone on some caches
+if [[ -f Resources/AppIcon.icns ]]; then
+  /usr/bin/swift -e "
+import AppKit
+let img = NSImage(contentsOfFile: \"$(pwd)/Resources/AppIcon.icns\")!
+_ = NSWorkspace.shared.setIcon(img, forFile: \"$INSTALL_APP\", options: [])
+_ = NSWorkspace.shared.setIcon(img, forFile: \"$BUILD_APP\", options: [])
+" 2>/dev/null || true
+fi
+
 echo "Built $BUILD_APP"
 echo "Installed $INSTALL_APP"
 codesign -dv "$INSTALL_APP" 2>&1 | grep -E 'Identifier|Signature|TeamIdentifier|Authority' || true
