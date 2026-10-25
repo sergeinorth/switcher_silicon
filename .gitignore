@@ -9,3 +9,6 @@ signing/
 dist/
 Resources/AppIcon.iconset/
 dist/
+
+# Local agent notes — not for the public repo
+.cursor/
