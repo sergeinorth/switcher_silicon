@@ -11,7 +11,7 @@ Converts text typed in the wrong keyboard layout (EN ↔ RU), with optional typo
 
 ## Download
 
-**[v0.1.1 — SwitcherSilicon-0.1.1-macos-arm64.zip](https://github.com/sergeinorth/switcher_silicon/releases/latest)**
+**[v0.1.2 — SwitcherSilicon-0.1.2-macos-arm64.zip](https://github.com/sergeinorth/switcher_silicon/releases/latest)**
 
 Unpack, move `SwitcherSilicon.app` to `/Applications`, allow Accessibility + Input Monitoring. See release notes for Gatekeeper tips.
 
