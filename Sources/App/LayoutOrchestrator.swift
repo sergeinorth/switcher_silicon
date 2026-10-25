@@ -16,10 +16,11 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     private var isConverting = false
     private var conversionGeneration = 0
     private var lastBufferedWord = ""
-    /// Last finished word (after space) — Option can still force-convert it.
-    private var lastFinishedWord = ""
+    /// Word completed by Space; valid only until the user types the next glyph.
+    private var pendingFinishedWord: String?
     private var lastCheckResult = "—"
     private var keyEventCount = 0
+    private var lastOptionAt: CFAbsoluteTime = 0
 
     var onStatusChange: ((String) -> Void)?
     var isTapActive: Bool { eventTap.isEnabled }
@@ -58,6 +59,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         Front app: \(FrontmostApp.bundleID ?? "?")
         Keys seen: \(keyEventCount)
         Last buffer: «\(lastBufferedWord)»
+        Pending finished: «\(pendingFinishedWord ?? "")»
         Last check: \(lastCheckResult)
         Excluded: \(settings.excludedApps.joined(separator: ", "))
         Log: ~/Library/Logs/SwitcherSilicon.log
@@ -130,6 +132,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
 
         let shift = flags.contains(.maskShift)
         if let glyph = resolvedGlyph(characters: characters, keyCode: keyCode, shift: shift) {
+            // New typing invalidates "word after space" Option target.
+            pendingFinishedWord = nil
             buffer.append(KeyStroke(characters: glyph, keyCode: keyCode))
             lastBufferedWord = buffer.stringValue
         }
@@ -147,9 +151,15 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
 
     func eventTapDidDetectOptionTap() {
         guard settings.useOptionTrigger else { return }
-        AppLog.line("option tap buffer=«\(buffer.stringValue)» last=«\(lastFinishedWord)»")
-        // Slight delay so Option key-up settles before we synthesize.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
+        let now = CFAbsoluteTimeGetCurrent()
+        // Debounce: repeated Option taps were eating the buffer then pasting an old clipboard word.
+        if now - lastOptionAt < 0.35 {
+            AppLog.line("option debounced")
+            return
+        }
+        lastOptionAt = now
+        AppLog.line("option tap buffer=«\(buffer.stringValue)» pending=«\(pendingFinishedWord ?? "")»")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self] in
             self?.convertLastWord(manual: true)
         }
     }
@@ -199,7 +209,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         {
             return
         }
-        lastFinishedWord = word
+        pendingFinishedWord = word
         guard word.count >= 2 else {
             AppLog.line("word too short «\(word)»")
             return
@@ -251,35 +261,39 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             return
         }
 
-        // Prefer live buffer; else last word before space (cursor is after that word+space).
+        // 1) Live buffer (word typed, no space yet) — main Option case.
+        // 2) pendingFinishedWord — only right after Space, before next glyph.
+        // Never fall back to clipboard: Cmd+C with no selection reused old pasteboard text
+        // (wrong sound + inserted a previous word).
         let fromBuffer = buffer.stringValue
         let word: String
         let deleteCount: Int
         let suffix: String
         if fromBuffer.count >= 1 {
             word = fromBuffer
-            deleteCount = word.count
+            deleteCount = Array(word).count
             suffix = ""
             buffer.clear()
-        } else if lastFinishedWord.count >= 1 {
-            word = lastFinishedWord
-            deleteCount = word.count + 1 // word + trailing space
+            pendingFinishedWord = nil
+        } else if let finished = pendingFinishedWord, finished.count >= 1 {
+            word = finished
+            deleteCount = Array(word).count + 1 // word + space
             suffix = " "
-            lastFinishedWord = ""
+            pendingFinishedWord = nil
         } else {
-            AppLog.line("option: empty buffer — try selection")
-            convertSelectionIfAny()
+            AppLog.line("option: nothing to convert")
+            soundPlayer.play(.undo) // audible "miss"
             return
         }
 
         let converted = ConversionEngine.convert(word, direction: .auto)
         guard converted != word else {
             AppLog.line("option: convert noop for «\(word)»")
+            soundPlayer.play(.undo)
             return
         }
-        // Don't skip the next auto word — that felt like Option "ate" the following fix.
         skipNextWord = false
-        AppLog.line("option convert «\(word)» -> «\(converted)»")
+        AppLog.line("option convert «\(word)» -> «\(converted)» delete=\(deleteCount)")
         performReplacement(
             original: word,
             converted: converted,
