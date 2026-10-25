@@ -7,7 +7,10 @@ let package = Package(
     targets: [
         .target(
             name: "Engine",
-            path: "Sources/Engine"
+            path: "Sources/Engine",
+            resources: [
+                .process("Resources"),
+            ]
         ),
         .target(
             name: "Platform",

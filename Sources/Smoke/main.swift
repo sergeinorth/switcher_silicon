@@ -31,6 +31,17 @@ expect(spell.suggestion(for: "helllo") == "hello", "spell helllo")
 expect(spell.suggestion(for: "автоконвертация") == nil, "spell skip compound junk")
 expect(spell.suggestion(for: "прпревет") == nil, "spell skip ambiguous")
 
+print(
+    "dict RU=\(BundledDictionary.russianCount) freq=\(BundledDictionary.spellAcceptRussianCount) EN=\(BundledDictionary.englishCount)"
+)
+expect(BundledDictionary.russianCount > 1_000_000, "bundled RU dictionary loaded")
+expect(BundledDictionary.spellAcceptRussianCount > 50_000, "RU frequency list loaded")
+expect(BundledDictionary.englishCount > 100_000, "bundled EN dictionary loaded")
+expect(BundledDictionary.sharedRussian.contains("привет"), "RU has привет")
+expect(BundledDictionary.spellAcceptRussian.contains("привет"), "freq has привет")
+expect(!BundledDictionary.spellAcceptRussian.contains("проревет"), "freq rejects junk")
+expect(BundledDictionary.sharedEnglish.contains("hello"), "EN has hello")
+
 let checker = LayoutChecker()
 expect(checker.check("ghbdtn") == .incorrect, "checker ghbdtn")
 expect(checker.check("руддщ") == .incorrect, "checker руддщ")

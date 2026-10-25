@@ -8,13 +8,38 @@ BUILD_APP="build/SwitcherSilicon.app"
 INSTALL_APP="/Applications/SwitcherSilicon.app"
 
 swift build -c release --arch arm64
-BIN=".build/release/${BIN_NAME}"
+
+# SwiftPM may put products under .build/release or .build/<triple>/release
+RELEASE_DIR=""
+for candidate in \
+  ".build/arm64-apple-macosx/release" \
+  ".build/release"
+do
+  if [[ -x "${candidate}/${BIN_NAME}" ]]; then
+    RELEASE_DIR="$candidate"
+    break
+  fi
+done
+if [[ -z "$RELEASE_DIR" ]]; then
+  echo "ERROR: release binary not found" >&2
+  exit 1
+fi
+BIN="${RELEASE_DIR}/${BIN_NAME}"
 
 rm -rf "$BUILD_APP"
 mkdir -p "$BUILD_APP/Contents/MacOS" "$BUILD_APP/Contents/Resources"
 cp "$BIN" "$BUILD_APP/Contents/MacOS/${BIN_NAME}"
 cp Resources/Info.plist "$BUILD_APP/Contents/Info.plist"
 printf 'APPL????' > "$BUILD_APP/Contents/PkgInfo"
+
+# Dictionaries for Bundle.main (avoid copying SPM *.bundle — codesign rejects them).
+if [[ -d Sources/Engine/Resources/Dictionaries ]]; then
+  mkdir -p "$BUILD_APP/Contents/Resources/Dictionaries"
+  cp -f Sources/Engine/Resources/Dictionaries/*.txt.gz \
+        Sources/Engine/Resources/Dictionaries/NOTICE.md \
+        "$BUILD_APP/Contents/Resources/Dictionaries/"
+  echo "Dictionaries: $(du -sh "$BUILD_APP/Contents/Resources/Dictionaries" | awk '{print $1}')"
+fi
 
 sign_app() {
   local app="$1"
