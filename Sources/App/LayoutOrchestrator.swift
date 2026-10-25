@@ -16,6 +16,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     private var isConverting = false
     private var conversionGeneration = 0
     private var lastBufferedWord = ""
+    /// Last finished word (after space) — Option can still force-convert it.
+    private var lastFinishedWord = ""
     private var lastCheckResult = "—"
     private var keyEventCount = 0
 
@@ -140,15 +142,16 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     }
 
     func eventTapDidReceiveFlagsChanged(event: CGEvent) -> Unmanaged<CGEvent>? {
-        if isConverting || EventSynth.isSynthesizing {
-            return Unmanaged.passUnretained(event)
+        Unmanaged.passUnretained(event)
+    }
+
+    func eventTapDidDetectOptionTap() {
+        guard settings.useOptionTrigger else { return }
+        AppLog.line("option tap buffer=«\(buffer.stringValue)» last=«\(lastFinishedWord)»")
+        // Slight delay so Option key-up settles before we synthesize.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
+            self?.convertLastWord(manual: true)
         }
-        if settings.useOptionTrigger, eventTap.consumeOptionTap() {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-                self?.convertLastWord(manual: true)
-            }
-        }
-        return Unmanaged.passUnretained(event)
     }
 
     /// Prefer event unicode; fall back to US keycode map (event unicode is often empty in taps).
@@ -196,8 +199,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         {
             return
         }
-        // Min 3 cuts false positives like «ша»→«if»; Option still converts shorter words.
-        guard word.count >= 3 else {
+        lastFinishedWord = word
+        guard word.count >= 2 else {
             AppLog.line("word too short «\(word)»")
             return
         }
@@ -243,25 +246,47 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     }
 
     private func convertLastWord(manual: Bool) {
-        guard !isConverting else { return }
-        let word = buffer.stringValue
-        if word.count >= 2 {
-            let converted = ConversionEngine.convert(word, direction: .auto)
-            buffer.clear()
-            if settings.cancelNextWordAfterManualSwitch {
-                skipNextWord = true
-            }
-            guard converted != word else { return }
-            performReplacement(
-                original: word,
-                converted: converted,
-                deleteCount: word.count,
-                suffix: "",
-                manual: true
-            )
+        guard !isConverting else {
+            AppLog.line("option ignored: busy converting")
             return
         }
-        convertSelectionIfAny()
+
+        // Prefer live buffer; else last word before space (cursor is after that word+space).
+        let fromBuffer = buffer.stringValue
+        let word: String
+        let deleteCount: Int
+        let suffix: String
+        if fromBuffer.count >= 1 {
+            word = fromBuffer
+            deleteCount = word.count
+            suffix = ""
+            buffer.clear()
+        } else if lastFinishedWord.count >= 1 {
+            word = lastFinishedWord
+            deleteCount = word.count + 1 // word + trailing space
+            suffix = " "
+            lastFinishedWord = ""
+        } else {
+            AppLog.line("option: empty buffer — try selection")
+            convertSelectionIfAny()
+            return
+        }
+
+        let converted = ConversionEngine.convert(word, direction: .auto)
+        guard converted != word else {
+            AppLog.line("option: convert noop for «\(word)»")
+            return
+        }
+        // Don't skip the next auto word — that felt like Option "ate" the following fix.
+        skipNextWord = false
+        AppLog.line("option convert «\(word)» -> «\(converted)»")
+        performReplacement(
+            original: word,
+            converted: converted,
+            deleteCount: deleteCount,
+            suffix: suffix,
+            manual: true
+        )
     }
 
     private func performReplacement(

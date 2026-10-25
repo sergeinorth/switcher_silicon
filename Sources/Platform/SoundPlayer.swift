@@ -12,6 +12,7 @@ public enum SoundEvent: Sendable {
 
 public final class SoundPlayer: @unchecked Sendable {
     public var settings: AppSettings
+    private var cache: [String: NSSound] = [:]
 
     public init(settings: AppSettings) {
         self.settings = settings
@@ -21,26 +22,47 @@ public final class SoundPlayer: @unchecked Sendable {
         guard settings.isSoundOn else { return }
 
         let mask: SoundMask
-        let systemSoundID: SystemSoundID
+        let fileName: String
         switch event {
         case .switchToRussian:
             mask = .switchToRussian
-            systemSoundID = 1057 // Tink
+            fileName = "Tink" // higher
         case .switchToEnglish:
             mask = .switchToEnglish
-            systemSoundID = 1057
+            fileName = "Pop"
         case .autoConvert:
             mask = .autoConvert
-            systemSoundID = 1104 // Begin recording-ish short click; distinct enough
+            fileName = "Tink"
         case .undo:
             mask = .undo
-            systemSoundID = 1053 // Fail / undo-ish
+            fileName = "Bottle"
         case .selectionConvert:
             mask = .selectionConvert
-            systemSoundID = 1103
+            fileName = "Purr"
         }
 
         guard settings.sounds.contains(mask) else { return }
-        AudioServicesPlaySystemSound(systemSoundID)
+
+        DispatchQueue.main.async { [weak self] in
+            self?.playNamed(fileName)
+        }
+    }
+
+    private func playNamed(_ name: String) {
+        if let cached = cache[name] {
+            cached.stop()
+            cached.currentTime = 0
+            cached.play()
+            return
+        }
+        let path = "/System/Library/Sounds/\(name).aiff"
+        if let sound = NSSound(contentsOfFile: path, byReference: true) {
+            cache[name] = sound
+            sound.volume = 1.0
+            sound.play()
+            return
+        }
+        // Last resort
+        NSSound.beep()
     }
 }

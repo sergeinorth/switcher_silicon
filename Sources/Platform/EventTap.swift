@@ -5,6 +5,7 @@ public protocol EventTapDelegate: AnyObject {
     func eventTap(didReceiveKeyDown keyCode: UInt16, characters: String, flags: CGEventFlags, event: CGEvent) -> Unmanaged<CGEvent>?
     func eventTap(didReceiveKeyUp keyCode: UInt16, flags: CGEventFlags, event: CGEvent) -> Unmanaged<CGEvent>?
     func eventTapDidReceiveFlagsChanged(event: CGEvent) -> Unmanaged<CGEvent>?
+    func eventTapDidDetectOptionTap()
 }
 
 public final class EventTap {
@@ -74,8 +75,6 @@ public final class EventTap {
             return Unmanaged.passUnretained(event)
         }
 
-        // Skip only our own synthesized key stream. While synthesizing, user
-        // keystrokes must still reach the delegate so the next word is buffered.
         if EventSynth.isOurs(event) {
             return Unmanaged.passUnretained(event)
         }
@@ -87,12 +86,19 @@ public final class EventTap {
         switch type {
         case .keyDown:
             let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+            // Any real key while Option is held cancels "Option alone" tap.
+            if optionDownAt != nil, keyCode != 58, keyCode != 61 {
+                optionAlone = false
+            }
             let flags = event.flags
             let chars = characters(from: event)
             return delegate?.eventTap(didReceiveKeyDown: keyCode, characters: chars, flags: flags, event: event)
                 ?? Unmanaged.passUnretained(event)
         case .keyUp:
             let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+            if keyCode == 58 || keyCode == 61 {
+                finishOptionIfAlone()
+            }
             return delegate?.eventTap(didReceiveKeyUp: keyCode, flags: event.flags, event: event)
                 ?? Unmanaged.passUnretained(event)
         case .flagsChanged:
@@ -104,36 +110,33 @@ public final class EventTap {
         }
     }
 
-    public private(set) var pendingOptionTap = false
-
-    public func consumeOptionTap() -> Bool {
-        defer { pendingOptionTap = false }
-        return pendingOptionTap
-    }
-
     private func trackOptionTap(_ event: CGEvent) {
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let flags = event.flags
         let isOptionKey = keyCode == 58 || keyCode == 61
-        guard isOptionKey else {
-            if optionDownAt != nil {
-                optionAlone = false
-            }
-            return
-        }
+        guard isOptionKey else { return }
 
         let optionDown = flags.contains(.maskAlternate)
         if optionDown {
             optionDownAt = CFAbsoluteTimeGetCurrent()
             optionAlone = true
-            pendingOptionTap = false
-        } else if let started = optionDownAt {
-            let duration = CFAbsoluteTimeGetCurrent() - started
-            if optionAlone && duration < 0.35 {
-                pendingOptionTap = true
+        } else {
+            finishOptionIfAlone()
+        }
+    }
+
+    private func finishOptionIfAlone() {
+        guard let started = optionDownAt else { return }
+        let duration = CFAbsoluteTimeGetCurrent() - started
+        optionDownAt = nil
+        let alone = optionAlone
+        optionAlone = false
+        // Up to 0.6s quick tap, no other keys.
+        if alone && duration < 0.60 {
+            nonisolated(unsafe) let del = self.delegate
+            DispatchQueue.main.async {
+                del?.eventTapDidDetectOptionTap()
             }
-            optionDownAt = nil
-            optionAlone = false
         }
     }
 
