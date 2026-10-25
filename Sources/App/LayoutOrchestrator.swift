@@ -85,12 +85,9 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             return Unmanaged.passUnretained(event)
         }
 
-        if WordDetector.isSeparatorKeyCode(keyCode) || characters.contains(where: WordDetector.isSeparator) {
-            // Never swallow the separator — let it land, then replace word+sep.
-            scheduleAutoConvertAfterSeparator(
-                separatorKeyCode: keyCode,
-                separatorCharacters: characters
-            )
+        // Auto-convert ONLY on Space / Tab / Enter (not on , . ; which are RU letters).
+        if WordDetector.isSeparatorKeyCode(keyCode) {
+            scheduleAutoConvertAfterSeparator(separatorKeyCode: keyCode)
             return Unmanaged.passUnretained(event)
         }
 
@@ -98,10 +95,9 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             return Unmanaged.passUnretained(event)
         }
 
-        if !characters.isEmpty {
-            for ch in characters where !WordDetector.isSeparator(ch) {
-                buffer.append(KeyStroke(characters: String(ch), keyCode: keyCode))
-            }
+        let shift = flags.contains(.maskShift)
+        if let glyph = resolvedGlyph(characters: characters, keyCode: keyCode, shift: shift) {
+            buffer.append(KeyStroke(characters: glyph, keyCode: keyCode))
         }
 
         return Unmanaged.passUnretained(event)
@@ -123,9 +119,22 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         return Unmanaged.passUnretained(event)
     }
 
+    /// Prefer event unicode; fall back to US keycode map (event unicode is often empty in taps).
+    private func resolvedGlyph(characters: String, keyCode: UInt16, shift: Bool) -> String? {
+        if characters.count == 1, let ch = characters.first, !WordDetector.isSeparator(ch) {
+            return String(ch)
+        }
+        if characters.count > 1 {
+            // Unusual multi-char — keep as-is if not separators.
+            let filtered = characters.filter { !WordDetector.isSeparator($0) }
+            return filtered.isEmpty ? nil : String(filtered)
+        }
+        return KeyCodeMap.usCharacter(keyCode: keyCode, shift: shift)
+    }
+
     // MARK: - Conversion
 
-    private func scheduleAutoConvertAfterSeparator(separatorKeyCode: UInt16, separatorCharacters: String) {
+    private func scheduleAutoConvertAfterSeparator(separatorKeyCode: UInt16) {
         let word = buffer.stringValue
         buffer.clear()
 
@@ -139,28 +148,32 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         {
             return
         }
-        guard !word.isEmpty else { return }
+        guard word.count >= 2 else { return }
         guard checker.check(word) == .incorrect else { return }
 
         let converted = ConversionEngine.convert(word, direction: .auto)
         guard converted != word else { return }
 
-        let sep: String
-        if separatorKeyCode == 49 || separatorCharacters == " " {
-            sep = " "
-        } else if !separatorCharacters.isEmpty {
-            sep = separatorCharacters
-        } else {
-            sep = ""
+        let sep = WordDetector.separatorString(forKeyCode: separatorKeyCode)
+        // For Return/Tab, deleting a newline/tab by character count is unreliable —
+        // only auto-replace on Space for now; still switch layout? Skip non-space.
+        guard separatorKeyCode == 49 else {
+            // Tab/Enter: convert word only (no sep in delete count); sep already typed.
+            conversionGeneration += 1
+            let generation = conversionGeneration
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                guard let self, generation == self.conversionGeneration else { return }
+                // Cursor is after newline; deleteCount = word only won't remove newline.
+                // Move: not handled — require Space for auto. Manual Option still works.
+            }
+            return
         }
 
-        // Word + separator are (about to be) in the document. Wait for the
-        // separator key to commit, then delete both and type fixed text + sep.
         conversionGeneration += 1
         let generation = conversionGeneration
-        let deleteCount = word.count + (sep.isEmpty ? 0 : sep.count)
+        let deleteCount = word.count + 1 // word + space
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             guard let self else { return }
             guard generation == self.conversionGeneration else { return }
             self.performReplacement(
@@ -176,7 +189,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     private func convertLastWord(manual: Bool) {
         guard !isConverting else { return }
         let word = buffer.stringValue
-        if !word.isEmpty {
+        if word.count >= 2 {
             let converted = ConversionEngine.convert(word, direction: .auto)
             buffer.clear()
             if settings.cancelNextWordAfterManualSwitch {
@@ -223,8 +236,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             soundPlayer.play(manual ? .switchToEnglish : .autoConvert)
         }
 
-        // Tiny pause so TIS layout switch settles before we emit glyphs.
-        usleep(15_000)
+        usleep(20_000)
         EventSynth.replaceCharacters(deleteCount: deleteCount, with: converted + suffix)
         buffer.clear()
         onStatusChange?(manual ? "manual:\(converted)" : "auto:\(converted)")
@@ -301,31 +313,6 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             EventSynth.replaceCharacters(deleteCount: word.count, with: toggled)
             buffer.clear()
             return
-        }
-        convertSelectionCase()
-    }
-
-    private func convertSelectionCase() {
-        let pasteboard = NSPasteboard.general
-        let previous = pasteboard.string(forType: .string)
-        EventSynth.isSynthesizing = true
-        EventSynth.postKey(keyCode: 8, keyDown: true, flags: .maskCommand)
-        EventSynth.postKey(keyCode: 8, keyDown: false, flags: .maskCommand)
-        usleep(50_000)
-        EventSynth.isSynthesizing = false
-        guard let selected = pasteboard.string(forType: .string), !selected.isEmpty else { return }
-        let toggled = ConversionEngine.toggleCase(selected)
-        pasteboard.clearContents()
-        pasteboard.setString(toggled, forType: .string)
-        EventSynth.isSynthesizing = true
-        EventSynth.postKey(keyCode: 9, keyDown: true, flags: .maskCommand)
-        EventSynth.postKey(keyCode: 9, keyDown: false, flags: .maskCommand)
-        EventSynth.isSynthesizing = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            if let previous {
-                pasteboard.clearContents()
-                pasteboard.setString(previous, forType: .string)
-            }
         }
     }
 
