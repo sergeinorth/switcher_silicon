@@ -47,9 +47,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     }
 
     func diagnostics() -> String {
-        let ax = AccessibilityPermission.isTrusted
         return """
-        Accessibility: \(ax ? "ok" : "NO")
+        \(AccessibilityPermission.diagnosticsLine)
         Event tap: \(eventTap.isEnabled ? "ok" : "NO")
         Autocorrect: \(settings.isAutocorrectionActive ? "on" : "off")
         Layout: \(inputSources.currentSourceID)
@@ -60,8 +59,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         Excluded: \(settings.excludedApps.joined(separator: ", "))
         Log: ~/Library/Logs/SwitcherSilicon.log
 
-        Выключи Caramba Switcher / RuSwitcher / Punto — они перехватывают те же клавиши.
-        Держи приложение в /Applications/SwitcherSilicon.app
+        Нужны: Мониторинг ввода + Универсальный доступ для /Applications/SwitcherSilicon.app
+        RuSwitcher держи выключенным.
         """
     }
 
