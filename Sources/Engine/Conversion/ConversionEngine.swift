@@ -2,6 +2,9 @@ import Foundation
 
 /// Bidirectional QWERTY US <-> Russian (ЙЦУКЕН) character mapping.
 public enum ConversionEngine: Sendable {
+    public static var usToRuKeys: Set<Character> { Set(usToRu.keys) }
+    public static var ruToUsKeys: Set<Character> { Set(ruToUs.keys) }
+
     private static let usToRu: [Character: Character] = {
         let pairs: [(Character, Character)] = [
             ("q", "й"), ("w", "ц"), ("e", "у"), ("r", "к"), ("t", "е"),
