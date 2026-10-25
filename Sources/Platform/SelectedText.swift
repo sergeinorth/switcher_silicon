@@ -8,12 +8,14 @@ public enum SelectedText {
         case empty
         /// Non-empty selected text from AX.
         case text(String)
-        /// No usable AX focus — caller may fall back to ⌘C.
-        case unknown
+        /// Range says something is selected, but text is unreadable — ⌘C may help.
+        case unreadSelection
+        /// No evidence of a selection — do not speculative-⌘C (pastes old clipboard / selects junk).
+        case none
     }
 
     public static func probe() -> Probe {
-        guard let element = focusedElement() else { return .unknown }
+        guard let element = focusedElement() else { return .none }
 
         var selectedValue: CFTypeRef?
         let selectedErr = AXUIElementCopyAttributeValue(
@@ -35,11 +37,11 @@ public enum SelectedText {
         if rangeErr == .success, let rangeValue {
             var cfRange = CFRange(location: 0, length: 0)
             if AXValueGetValue(rangeValue as! AXValue, .cfRange, &cfRange) {
-                return cfRange.length == 0 ? .empty : .unknown
+                return cfRange.length == 0 ? .empty : .unreadSelection
             }
         }
 
-        return .unknown
+        return .none
     }
 
     /// Replace current selection in-place. Returns false if the element rejects the write.

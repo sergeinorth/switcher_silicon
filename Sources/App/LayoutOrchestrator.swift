@@ -131,6 +131,12 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             return Unmanaged.passUnretained(event)
         }
 
+        if WordDetector.isNavigation(keyCode) {
+            // Cursor left the word — stale Option toggle/pending would hit the wrong place.
+            invalidateTypingContext()
+            return Unmanaged.passUnretained(event)
+        }
+
         let busy = isConverting || EventSynth.isSynthesizing
 
         // Auto-convert ONLY on Space / Tab / Enter (not on , . ; which are RU letters).
@@ -157,6 +163,9 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             undo.clearLast()
             buffer.append(KeyStroke(characters: glyph, keyCode: keyCode))
             lastBufferedWord = buffer.stringValue
+        } else if shouldBreakWord(keyCode: keyCode, characters: characters) {
+            // Digits / @ / etc. end the token — otherwise Option converts a glued franken-buffer.
+            invalidateTypingContext()
         }
 
         return Unmanaged.passUnretained(event)
@@ -200,7 +209,15 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             let filtered = characters.filter(isBufferableGlyph)
             return filtered.isEmpty ? nil : String(filtered)
         }
-        return KeyCodeMap.usCharacter(keyCode: keyCode, shift: shift)
+        // KeyCodeMap includes digits/@ — only keep layout-ambiguous word glyphs.
+        guard let mapped = KeyCodeMap.usCharacter(keyCode: keyCode, shift: shift),
+              mapped.count == 1,
+              let ch = mapped.first,
+              isBufferableGlyph(ch)
+        else {
+            return nil
+        }
+        return mapped
     }
 
     private func isBufferableGlyph(_ ch: Character) -> Bool {
@@ -213,6 +230,29 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             || ch == "-" || ch == "—" || ch == "–"
             || ch == "," || ch == "." || ch == ";" || ch == "'" || ch == "[" || ch == "]" || ch == "`"
             || ch == "<" || ch == ">" || ch == ":" || ch == "\"" || ch == "{" || ch == "}" || ch == "~"
+    }
+
+    /// Printable key that is not part of a layout-word (digit, @, …) — ends the current token.
+    private func shouldBreakWord(keyCode: UInt16, characters: String) -> Bool {
+        if let ch = characters.first, characters.count == 1 {
+            if ch.isLetter || isBufferableGlyph(ch) { return false }
+            if ch.isWhitespace || ch.unicodeScalars.allSatisfy({ CharacterSet.controlCharacters.contains($0) }) {
+                return false
+            }
+            return true
+        }
+        if characters.isEmpty, let mapped = KeyCodeMap.usCharacter(keyCode: keyCode, shift: false) {
+            guard let ch = mapped.first, mapped.count == 1 else { return false }
+            return !isBufferableGlyph(ch)
+        }
+        return false
+    }
+
+    private func invalidateTypingContext() {
+        buffer.clear()
+        lastBufferedWord = ""
+        pendingFinishedWord = nil
+        undo.clearLast()
     }
 
     // MARK: - Conversion
@@ -348,9 +388,9 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
 
     /// Option:
     /// 1) typed buffer → force convert
-    /// 2) selected text (AX, else ⌘C probe) → flip whole selection
-    /// 3) toggle last conversion
-    /// 4) pending word after Space
+    /// 2) pending word after Space (before toggle — otherwise old undo eats the tap)
+    /// 3) toggle last conversion (fresh only)
+    /// 4) selected text (AX; ⌘C only when range proves a selection)
     private func handleOptionTap() {
         guard !isConverting else {
             AppLog.line("option ignored: busy converting")
@@ -363,16 +403,24 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             let word = fromBuffer
             buffer.clear()
             pendingFinishedWord = nil
-            forceConvert(word: word, deleteCount: Array(word).count, suffix: "")
+            forceConvert(word: word, deleteCount: Array(word).count, suffix: "", afterSpace: false)
             return
         }
 
-        if convertSelectionIfAny() {
+        if let finished = pendingFinishedWord, finished.count >= 1 {
+            pendingFinishedWord = nil
+            undo.clearLast()
+            forceConvert(
+                word: finished,
+                deleteCount: Array(finished).count + 1,
+                suffix: " ",
+                afterSpace: true
+            )
             return
         }
 
         // Toggle last conversion (fixes "Option only reverts once").
-        if let last = undo.last {
+        if let last = undo.last, isFreshSnapshot(last) {
             if last.showingConverted {
                 AppLog.line("option toggle → original «\(last.converted)» -> «\(last.original)»")
                 applySnapshot(last, showConverted: false)
@@ -382,10 +430,12 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             }
             return
         }
+        if undo.last != nil {
+            AppLog.line("option: drop stale undo")
+            undo.clearLast()
+        }
 
-        if let finished = pendingFinishedWord, finished.count >= 1 {
-            pendingFinishedWord = nil
-            forceConvert(word: finished, deleteCount: Array(finished).count + 1, suffix: " ")
+        if convertSelectionIfAny() {
             return
         }
 
@@ -393,7 +443,11 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         soundPlayer.play(.undo)
     }
 
-    private func forceConvert(word: String, deleteCount: Int, suffix: String) {
+    private func isFreshSnapshot(_ snap: ConversionSnapshot) -> Bool {
+        Date().timeIntervalSince(snap.createdAt) < 45
+    }
+
+    private func forceConvert(word: String, deleteCount: Int, suffix: String, afterSpace: Bool) {
         let converted = ConversionEngine.convert(word, direction: .auto)
         guard converted != word else {
             AppLog.line("option: convert noop for «\(word)»")
@@ -401,14 +455,17 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             return
         }
         skipNextWord = false
-        AppLog.line("option convert «\(word)» -> «\(converted)» delete=\(deleteCount)")
+        AppLog.line("option convert «\(word)» -> «\(converted)» delete=\(deleteCount) afterSpace=\(afterSpace)")
         enqueueReplacement(
             original: word,
             converted: converted,
             deleteCount: deleteCount,
             suffix: suffix,
             automatic: false,
-            switchLayout: true
+            switchLayout: true,
+            immediate: true,
+            useWordDelete: afterSpace,
+            trailingSpaceInField: afterSpace
         )
     }
 
@@ -530,12 +587,12 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     @discardableResult
     private func convertSelectionIfAny() -> Bool {
         switch SelectedText.probe() {
-        case .empty:
+        case .empty, .none:
             return false
         case let .text(ax):
             return applySelectionConversion(ax, viaAX: true)
-        case .unknown:
-            // Fallback for apps without AX selected-text (Chrome, some Electron).
+        case .unreadSelection:
+            // Only when AX range length > 0 — never speculative ⌘C (old clipboard / whole field).
             return convertSelectionViaClipboard()
         }
     }

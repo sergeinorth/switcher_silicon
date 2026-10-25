@@ -24,6 +24,16 @@ public enum WordDetector: Sendable {
         keyCode == 53
     }
 
+    /// Arrows / Home / End / Page Up/Down — cursor left the typed word.
+    public static func isNavigation(_ keyCode: UInt16) -> Bool {
+        switch keyCode {
+        case 123, 124, 125, 126, 115, 119, 116, 121:
+            return true
+        default:
+            return false
+        }
+    }
+
     public static func separatorString(forKeyCode keyCode: UInt16) -> String {
         switch keyCode {
         case 49: return " "

@@ -66,10 +66,13 @@ public enum EventSynth {
         // Let the last typed key commit into the target field before we erase.
         usleep(12_000)
         if useWordDelete, deleteCount > 0 {
-            deleteBackwardWord()
+            // Cursor is after "word " — drop the space first, then Option+Delete the word.
+            // Reverse order left a stray char or ate into the previous word in some apps.
             if trailingSpaceInField {
                 deleteBackward(times: 1)
+                usleep(3_000)
             }
+            deleteBackwardWord()
         } else {
             deleteBackward(times: deleteCount)
         }
