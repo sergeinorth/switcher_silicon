@@ -490,18 +490,18 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             let toRussian = ConversionEngine.dominantScript(last.original) == .latin
                 || ConversionEngine.dominantScript(last.converted) == .cyrillic
             if toRussian {
-                _ = inputSources.switchToRussian(preferredID: settings.russianLayoutID)
+                ensureLayout(wantRussian: true, reason: "toggle")
                 soundPlayer.play(.switchToRussian)
             } else {
-                _ = inputSources.switchToEnglish(preferredID: settings.englishLayoutID)
+                ensureLayout(wantRussian: false, reason: "toggle")
                 soundPlayer.play(.switchToEnglish)
             }
         } else {
             switch ConversionEngine.dominantScript(last.original) {
             case .latin:
-                _ = inputSources.switchToEnglish(preferredID: settings.englishLayoutID)
+                ensureLayout(wantRussian: false, reason: "revert")
             case .cyrillic:
-                _ = inputSources.switchToRussian(preferredID: settings.russianLayoutID)
+                ensureLayout(wantRussian: true, reason: "revert")
             case .mixed, .other:
                 break
             }
@@ -563,13 +563,12 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         ))
 
         if switchLayout {
-            if toRussian {
-                _ = inputSources.switchToRussian(preferredID: settings.russianLayoutID)
-                soundPlayer.play(automatic ? .autoConvert : .switchToRussian)
-            } else {
-                _ = inputSources.switchToEnglish(preferredID: settings.englishLayoutID)
-                soundPlayer.play(automatic ? .autoConvert : .switchToEnglish)
-            }
+            ensureLayout(wantRussian: toRussian, reason: automatic ? "auto" : "manual")
+            soundPlayer.play(
+                automatic
+                    ? .autoConvert
+                    : (toRussian ? .switchToRussian : .switchToEnglish)
+            )
             usleep(8_000)
         } else {
             soundPlayer.play(.autoConvert)
@@ -650,11 +649,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
 
         let toRussian = ConversionEngine.dominantScript(selected) == .latin
             || ConversionEngine.dominantScript(converted) == .cyrillic
-        if toRussian {
-            _ = inputSources.switchToRussian(preferredID: settings.russianLayoutID)
-        } else {
-            _ = inputSources.switchToEnglish(preferredID: settings.englishLayoutID)
-        }
+        ensureLayout(wantRussian: toRussian, reason: "selection")
 
         var replaced = false
         if viaAX {
@@ -776,21 +771,55 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
               let bundle = app.bundleIdentifier
         else { return }
 
+        // Menu-bar accessory activations must not yank the user's layout.
+        if bundle == Bundle.main.bundleIdentifier { return }
+
         cachedFrontBundleID = bundle
         buffer.clear()
         undo.clearLast()
         pendingFinishedWord = nil
 
         guard settings.rememberLayoutPerApp else { return }
+        // Don't fight an in-flight convert (was restoring stale EN after we flipped to RU).
+        guard !isConverting, !EventSynth.isSynthesizing else { return }
 
-        if let previous = lastFrontBundle {
+        if let previous = lastFrontBundle, previous != Bundle.main.bundleIdentifier {
             appLayouts[previous] = inputSources.currentSourceID
         }
         lastFrontBundle = bundle
 
-        if let saved = appLayouts[bundle], !saved.isEmpty {
-            _ = inputSources.select(sourceID: saved)
+        if let saved = appLayouts[bundle], !saved.isEmpty, saved != inputSources.currentSourceID {
+            let ok = inputSources.select(sourceID: saved)
+            AppLog.line(
+                "remember layout \(bundle) → \(saved) ok=\(ok) now=\(inputSources.currentSourceID)"
+            )
         }
+    }
+
+    /// Flip system layout and remember it for the front app so per-app restore cannot undo us.
+    @discardableResult
+    private func ensureLayout(wantRussian: Bool, reason: String) -> Bool {
+        let before = inputSources.currentSourceID
+        let ok: Bool
+        if wantRussian {
+            ok = inputSources.switchToRussian(preferredID: settings.russianLayoutID)
+        } else {
+            ok = inputSources.switchToEnglish(preferredID: settings.englishLayoutID)
+        }
+        let after = inputSources.currentSourceID
+        let matched = wantRussian ? inputSources.isCurrentRussian : !inputSources.isCurrentRussian
+        if !ok || !matched {
+            AppLog.line(
+                "layout FAIL \(reason) want=\(wantRussian ? "RU" : "EN") before=\(before) after=\(after)"
+            )
+        } else if before != after {
+            AppLog.line("layout \(reason) \(before) → \(after)")
+        }
+        if matched, let bundle = cachedFrontBundleID ?? FrontmostApp.bundleID {
+            appLayouts[bundle] = after
+            cachedFrontBundleID = bundle
+        }
+        return matched
     }
 
     /// Gunzip + build ~2M-word Sets off the typing path (first Space used to hitch).

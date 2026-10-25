@@ -17,6 +17,12 @@ public final class InputSourceManager: @unchecked Sendable {
     }
 
     public var currentSourceID: String {
+        // Prefer the keyboard *layout* source — IME wrappers can hide the real EN/RU map.
+        if let layout = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+           let sid = id(of: layout), !sid.isEmpty
+        {
+            return sid
+        }
         guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else {
             return ""
         }
@@ -24,24 +30,33 @@ public final class InputSourceManager: @unchecked Sendable {
     }
 
     public var isCurrentRussian: Bool {
-        let id = currentSourceID.lowercased()
-        if id.contains("russian") || id.contains("cyrillic") || id.contains("ukrain")
-            || id.contains("belarus") || id.contains("bulgar") || id.contains("serbian")
-        {
-            return true
-        }
-        // Fallback: localized name
-        if let name = currentSourceName?.lowercased() {
-            return name.contains("рус") || name.contains("russian") || name.contains("укра")
-        }
-        return false
+        isRussianID(currentSourceID) || isRussianName(currentSourceName)
     }
 
     public var currentSourceName: String? {
+        if let layout = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+           let n = name(of: layout)
+        {
+            return n
+        }
         guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else {
             return nil
         }
         return name(of: source)
+    }
+
+    public func isRussianID(_ sourceID: String) -> Bool {
+        let id = sourceID.lowercased()
+        return id.contains("russian") || id.contains("cyrillic") || id.contains("ukrain")
+            || id.contains("belarus") || id.contains("bulgar") || id.contains("serbian")
+            || id.contains("kazakh") || id.contains("kyrgyz") || id.contains("tajik")
+            || id.contains("turkmen") || id.contains("uzbek") || id.contains("mongolian")
+    }
+
+    private func isRussianName(_ name: String?) -> Bool {
+        guard let name = name?.lowercased() else { return false }
+        return name.contains("рус") || name.contains("russian") || name.contains("укра")
+            || name.contains("бел") || name.contains("кырг") || name.contains("қаз")
     }
 
     public func availableSources() -> [(id: String, name: String)] {
@@ -73,6 +88,7 @@ public final class InputSourceManager: @unchecked Sendable {
 
     @discardableResult
     public func select(sourceID: String) -> Bool {
+        guard !sourceID.isEmpty else { return false }
         guard let list = TISCreateInputSourceList(nil, false)?.takeRetainedValue() as? [TISInputSource] else {
             return false
         }
@@ -80,29 +96,47 @@ public final class InputSourceManager: @unchecked Sendable {
             return false
         }
         let status = TISSelectInputSource(source)
-        return status == noErr
+        guard status == noErr else { return false }
+        // TIS can report success before the session layout actually flips.
+        usleep(12_000)
+        return currentSourceID == sourceID || matchesScript(sourceID: sourceID)
+    }
+
+    /// Select and verify; one retry — convert path used to leave EN stuck while pasting RU.
+    @discardableResult
+    public func selectVerified(sourceID: String) -> Bool {
+        if select(sourceID: sourceID) { return true }
+        usleep(25_000)
+        return select(sourceID: sourceID)
+    }
+
+    private func matchesScript(sourceID: String) -> Bool {
+        // Accept any RU layout when we asked for RU (IDs may differ: Russian vs RussianWin).
+        if isRussianID(sourceID) { return isCurrentRussian }
+        if !isRussianID(sourceID) { return !isCurrentRussian }
+        return false
     }
 
     @discardableResult
     public func switchToRussian(preferredID: String?) -> Bool {
-        if let preferredID, !preferredID.isEmpty, select(sourceID: preferredID) {
+        if let preferredID, !preferredID.isEmpty, selectVerified(sourceID: preferredID) {
             return true
         }
-        if let id = preferRussianID() {
-            return select(sourceID: id)
+        if let id = preferRussianID(), selectVerified(sourceID: id) {
+            return true
         }
-        return false
+        return isCurrentRussian
     }
 
     @discardableResult
     public func switchToEnglish(preferredID: String?) -> Bool {
-        if let preferredID, !preferredID.isEmpty, select(sourceID: preferredID) {
+        if let preferredID, !preferredID.isEmpty, selectVerified(sourceID: preferredID) {
             return true
         }
-        if let id = preferEnglishID() {
-            return select(sourceID: id)
+        if let id = preferEnglishID(), selectVerified(sourceID: id) {
+            return true
         }
-        return false
+        return !isCurrentRussian
     }
 
     @discardableResult
