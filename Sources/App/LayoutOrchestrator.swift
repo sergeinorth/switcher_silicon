@@ -86,10 +86,6 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     // MARK: - EventTapDelegate
 
     func eventTap(didReceiveKeyDown keyCode: UInt16, characters: String, flags: CGEventFlags, event: CGEvent) -> Unmanaged<CGEvent>? {
-        if isConverting || EventSynth.isSynthesizing {
-            return Unmanaged.passUnretained(event)
-        }
-
         keyEventCount += 1
 
         if isExcludedFrontApp() {
@@ -112,9 +108,17 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             return Unmanaged.passUnretained(event)
         }
 
+        let busy = isConverting || EventSynth.isSynthesizing
+
         // Auto-convert ONLY on Space / Tab / Enter (not on , . ; which are RU letters).
         if WordDetector.isSeparatorKeyCode(keyCode) {
-            scheduleAutoConvertAfterSeparator(separatorKeyCode: keyCode)
+            if busy {
+                // Defer: remember separator until replace finishes would be complex;
+                // just keep buffering after space by clearing — space already typed.
+                buffer.clear()
+            } else {
+                scheduleAutoConvertAfterSeparator(separatorKeyCode: keyCode)
+            }
             return Unmanaged.passUnretained(event)
         }
 
@@ -166,6 +170,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             return false
         }
         return ch.isLetter
+            || ch == "-" || ch == "—" || ch == "–"
             || ch == "," || ch == "." || ch == ";" || ch == "'" || ch == "[" || ch == "]" || ch == "`"
             || ch == "<" || ch == ">" || ch == ":" || ch == "\"" || ch == "{" || ch == "}" || ch == "~"
     }
@@ -191,7 +196,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         {
             return
         }
-        guard word.count >= 2 else {
+        // Min 3 cuts false positives like «ша»→«if»; Option still converts shorter words.
+        guard word.count >= 3 else {
             AppLog.line("word too short «\(word)»")
             return
         }

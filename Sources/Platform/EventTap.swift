@@ -74,8 +74,9 @@ public final class EventTap {
             return Unmanaged.passUnretained(event)
         }
 
-        // Pass through our synthetic stream without buffering / converting.
-        if EventSynth.isOurs(event) || EventSynth.isSynthesizing {
+        // Skip only our own synthesized key stream. While synthesizing, user
+        // keystrokes must still reach the delegate so the next word is buffered.
+        if EventSynth.isOurs(event) {
             return Unmanaged.passUnretained(event)
         }
 
