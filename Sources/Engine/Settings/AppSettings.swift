@@ -77,6 +77,26 @@ public struct SoundPrefs: Codable, Equatable, Sendable {
     ]
 }
 
+public enum UILanguage: String, Codable, Sendable, CaseIterable {
+    case russian
+    case english
+
+    public static var systemDefault: UILanguage {
+        let langs = Locale.preferredLanguages.map { $0.lowercased() }
+        if langs.contains(where: { $0.hasPrefix("ru") }) {
+            return .russian
+        }
+        return .english
+    }
+
+    public var menuLabel: String {
+        switch self {
+        case .russian: return "Русский"
+        case .english: return "English"
+        }
+    }
+}
+
 public struct AppSettings: Codable, Equatable, Sendable {
     public var russianLayoutID: String
     public var englishLayoutID: String
@@ -96,6 +116,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var excludedApps: [String]
     public var userRules: [UserRule]
     public var launchesOnStartup: Bool
+    /// Menu / alerts language (not keyboard layout).
+    public var uiLanguage: UILanguage
 
     public static let `default` = AppSettings(
         russianLayoutID: "",
@@ -114,7 +136,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         rememberLayoutPerApp: true,
         excludedApps: [],
         userRules: [],
-        launchesOnStartup: true
+        launchesOnStartup: true,
+        uiLanguage: .systemDefault
     )
 
     public init(
@@ -134,7 +157,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         rememberLayoutPerApp: Bool,
         excludedApps: [String],
         userRules: [UserRule],
-        launchesOnStartup: Bool
+        launchesOnStartup: Bool,
+        uiLanguage: UILanguage
     ) {
         self.russianLayoutID = russianLayoutID
         self.englishLayoutID = englishLayoutID
@@ -153,6 +177,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.excludedApps = excludedApps
         self.userRules = userRules
         self.launchesOnStartup = launchesOnStartup
+        self.uiLanguage = uiLanguage
     }
 
     public init(from decoder: Decoder) throws {
@@ -175,6 +200,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         excludedApps = try c.decodeIfPresent([String].self, forKey: .excludedApps) ?? d.excludedApps
         userRules = try c.decodeIfPresent([UserRule].self, forKey: .userRules) ?? d.userRules
         launchesOnStartup = try c.decodeIfPresent(Bool.self, forKey: .launchesOnStartup) ?? d.launchesOnStartup
+        uiLanguage = try c.decodeIfPresent(UILanguage.self, forKey: .uiLanguage) ?? d.uiLanguage
     }
 }
 

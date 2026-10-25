@@ -62,21 +62,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showPermissionAlert() {
+        let lang = orchestrator.currentSettings.uiLanguage
         let alert = NSAlert()
-        alert.messageText = "Нужны два разрешения"
-        alert.informativeText = """
-        1) Конфиденциальность → Мониторинг ввода → включи SwitcherSilicon
-        2) Конфиденциальность → Универсальный доступ → включи SwitcherSilicon
-
-        Если галочка уже стоит, выключи и включи снова.
-        Добавь через «+» файл: /Applications/SwitcherSilicon.app
-
-        Пока в менюшке «!» — конвертация не работает.
-        """
+        alert.messageText = L10n.t(.permTitle, lang)
+        alert.informativeText = L10n.t(.permBody, lang)
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "Открыть Мониторинг ввода")
-        alert.addButton(withTitle: "Открыть Универсальный доступ")
-        alert.addButton(withTitle: "Позже")
+        alert.addButton(withTitle: L10n.t(.openInputMonitoring, lang).replacingOccurrences(of: "…", with: ""))
+        alert.addButton(withTitle: L10n.t(.openAccessibility, lang).replacingOccurrences(of: "…", with: ""))
+        alert.addButton(withTitle: L10n.t(.later, lang))
         let response = alert.runModal()
         if response == .alertFirstButtonReturn {
             AccessibilityPermission.openInputMonitoringSettings()

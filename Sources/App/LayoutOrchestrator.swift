@@ -61,10 +61,13 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     }
 
     func diagnostics() -> String {
+        let hint = L10n.t(.diagHint, settings.uiLanguage)
         return """
         \(AccessibilityPermission.diagnosticsLine)
         Event tap: \(eventTap.isEnabled ? "ok" : "NO")
         Autocorrect: \(settings.isAutocorrectionActive ? "on" : "off")
+        Spell: \(settings.isSpellAutocorrectActive ? "on" : "off")
+        UI: \(settings.uiLanguage.rawValue)
         Layout: \(inputSources.currentSourceID)
         Front app: \(FrontmostApp.bundleID ?? "?")
         Keys seen: \(keyEventCount)
@@ -74,8 +77,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         Excluded: \(settings.excludedApps.joined(separator: ", "))
         Log: ~/Library/Logs/SwitcherSilicon.log
 
-        Нужны: Мониторинг ввода + Универсальный доступ для /Applications/SwitcherSilicon.app
-        RuSwitcher держи выключенным.
+        \(hint)
         """
     }
 

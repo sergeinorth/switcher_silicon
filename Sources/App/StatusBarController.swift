@@ -13,6 +13,8 @@ final class StatusBarController {
     private var layoutPoll: Timer?
     private var lastTitle = ""
 
+    private var lang: UILanguage { settings.uiLanguage }
+
     init(orchestrator: LayoutOrchestrator) {
         self.orchestrator = orchestrator
         self.settings = orchestrator.currentSettings
@@ -57,24 +59,26 @@ final class StatusBarController {
         item.button?.title = title
     }
 
+    private func s(_ key: L10n.Key) -> String {
+        L10n.t(key, lang)
+    }
+
     private func rebuildMenu() {
         let menu = NSMenu()
+        let l = lang
 
         let titleItem = NSMenuItem(title: "Switcher Silicon", action: nil, keyEquivalent: "")
         titleItem.isEnabled = false
         menu.addItem(titleItem)
         menu.addItem(.separator())
 
-        let layoutItem = NSMenuItem(
-            title: "Раскладка: \(inputSources.isCurrentRussian ? "РУ" : "EN")",
-            action: nil,
-            keyEquivalent: ""
-        )
+        let layoutCode = inputSources.isCurrentRussian ? "РУ" : "EN"
+        let layoutItem = NSMenuItem(title: s(.layout(layoutCode)), action: nil, keyEquivalent: "")
         layoutItem.isEnabled = false
         menu.addItem(layoutItem)
 
         let axItem = NSMenuItem(
-            title: AccessibilityPermission.isAXTrusted ? "Универсальный доступ: ок" : "Универсальный доступ: НЕТ",
+            title: AccessibilityPermission.isAXTrusted ? s(.accessibilityOK) : s(.accessibilityNO),
             action: nil,
             keyEquivalent: ""
         )
@@ -82,7 +86,7 @@ final class StatusBarController {
         menu.addItem(axItem)
 
         let listenItem = NSMenuItem(
-            title: AccessibilityPermission.canListenEvents ? "Мониторинг ввода: ок" : "Мониторинг ввода: НЕТ",
+            title: AccessibilityPermission.canListenEvents ? s(.inputMonitoringOK) : s(.inputMonitoringNO),
             action: nil,
             keyEquivalent: ""
         )
@@ -90,7 +94,7 @@ final class StatusBarController {
         menu.addItem(listenItem)
 
         let tapItem = NSMenuItem(
-            title: orchestrator.isTapActive ? "Event tap: ок" : "Event tap: НЕТ",
+            title: orchestrator.isTapActive ? s(.eventTapOK) : s(.eventTapNO),
             action: nil,
             keyEquivalent: ""
         )
@@ -100,7 +104,7 @@ final class StatusBarController {
         menu.addItem(.separator())
 
         let autoItem = NSMenuItem(
-            title: settings.isAutocorrectionActive ? "Автоконвертация: вкл" : "Автоконвертация: выкл",
+            title: settings.isAutocorrectionActive ? s(.autoOn) : s(.autoOff),
             action: #selector(toggleAuto),
             keyEquivalent: ""
         )
@@ -108,7 +112,7 @@ final class StatusBarController {
         menu.addItem(autoItem)
 
         let spellItem = NSMenuItem(
-            title: settings.isSpellAutocorrectActive ? "Автоопечатки: вкл" : "Автоопечатки: выкл",
+            title: settings.isSpellAutocorrectActive ? s(.spellOn) : s(.spellOff),
             action: #selector(toggleSpell),
             keyEquivalent: ""
         )
@@ -116,49 +120,61 @@ final class StatusBarController {
         menu.addItem(spellItem)
 
         let soundItem = NSMenuItem(
-            title: settings.isSoundOn ? "Звуки: вкл" : "Звуки: выкл",
+            title: settings.isSoundOn ? s(.soundOn) : s(.soundOff),
             action: #selector(toggleSound),
             keyEquivalent: ""
         )
         soundItem.target = self
         menu.addItem(soundItem)
 
-        let soundsMenu = NSMenuItem(title: "Выбор звуков", action: nil, keyEquivalent: "")
+        let soundsMenu = NSMenuItem(title: s(.soundPicker), action: nil, keyEquivalent: "")
         soundsMenu.submenu = buildSoundsSubmenu()
         menu.addItem(soundsMenu)
 
+        let langMenu = NSMenuItem(title: s(.language), action: nil, keyEquivalent: "")
+        let langSub = NSMenu()
+        for option in UILanguage.allCases {
+            let opt = NSMenuItem(title: option.menuLabel, action: #selector(selectUILanguage(_:)), keyEquivalent: "")
+            opt.target = self
+            opt.representedObject = option.rawValue
+            opt.state = (option == l) ? .on : .off
+            langSub.addItem(opt)
+        }
+        langMenu.submenu = langSub
+        menu.addItem(langMenu)
+
         menu.addItem(.separator())
 
-        let undoItem = NSMenuItem(title: "Отменить последнюю конвертацию", action: #selector(undo), keyEquivalent: "z")
+        let undoItem = NSMenuItem(title: s(.undoLast), action: #selector(undo), keyEquivalent: "z")
         undoItem.keyEquivalentModifierMask = [.command, .option]
         undoItem.target = self
         menu.addItem(undoItem)
 
-        let caseItem = NSMenuItem(title: "Сменить регистр", action: #selector(changeCase), keyEquivalent: "")
+        let caseItem = NSMenuItem(title: s(.changeCase), action: #selector(changeCase), keyEquivalent: "")
         caseItem.target = self
         menu.addItem(caseItem)
 
         menu.addItem(.separator())
 
-        let diagItem = NSMenuItem(title: "Диагностика…", action: #selector(showDiagnostics), keyEquivalent: "")
+        let diagItem = NSMenuItem(title: s(.diagnostics), action: #selector(showDiagnostics), keyEquivalent: "")
         diagItem.target = self
         menu.addItem(diagItem)
 
-        let listenSettings = NSMenuItem(title: "Открыть Мониторинг ввода…", action: #selector(openInputMonitoring), keyEquivalent: "")
+        let listenSettings = NSMenuItem(title: s(.openInputMonitoring), action: #selector(openInputMonitoring), keyEquivalent: "")
         listenSettings.target = self
         menu.addItem(listenSettings)
 
-        let accessItem = NSMenuItem(title: "Открыть Универсальный доступ…", action: #selector(openAccessibility), keyEquivalent: "")
+        let accessItem = NSMenuItem(title: s(.openAccessibility), action: #selector(openAccessibility), keyEquivalent: "")
         accessItem.target = self
         menu.addItem(accessItem)
 
-        let excludeItem = NSMenuItem(title: "Исключить текущее приложение", action: #selector(excludeFrontApp), keyEquivalent: "")
+        let excludeItem = NSMenuItem(title: s(.excludeApp), action: #selector(excludeFrontApp), keyEquivalent: "")
         excludeItem.target = self
         menu.addItem(excludeItem)
 
         menu.addItem(.separator())
 
-        let quitItem = NSMenuItem(title: "Выйти", action: #selector(quit), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: s(.quit), action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
@@ -167,33 +183,13 @@ final class StatusBarController {
 
     private func buildSoundsSubmenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(soundRoleMenu(
-            title: "На русский",
-            current: settings.soundPrefs.switchToRussian,
-            role: "russian"
-        ))
-        menu.addItem(soundRoleMenu(
-            title: "На английский",
-            current: settings.soundPrefs.switchToEnglish,
-            role: "english"
-        ))
-        menu.addItem(soundRoleMenu(
-            title: "Автоконвертация",
-            current: settings.soundPrefs.autoConvert,
-            role: "auto"
-        ))
-        menu.addItem(soundRoleMenu(
-            title: "Отмена / промах",
-            current: settings.soundPrefs.undo,
-            role: "undo"
-        ))
-        menu.addItem(soundRoleMenu(
-            title: "Выделение",
-            current: settings.soundPrefs.selectionConvert,
-            role: "selection"
-        ))
+        menu.addItem(soundRoleMenu(title: s(.soundToRussian), current: settings.soundPrefs.switchToRussian, role: "russian"))
+        menu.addItem(soundRoleMenu(title: s(.soundToEnglish), current: settings.soundPrefs.switchToEnglish, role: "english"))
+        menu.addItem(soundRoleMenu(title: s(.soundAuto), current: settings.soundPrefs.autoConvert, role: "auto"))
+        menu.addItem(soundRoleMenu(title: s(.soundUndo), current: settings.soundPrefs.undo, role: "undo"))
+        menu.addItem(soundRoleMenu(title: s(.soundSelection), current: settings.soundPrefs.selectionConvert, role: "selection"))
         menu.addItem(.separator())
-        let reset = NSMenuItem(title: "Сбросить по умолчанию", action: #selector(resetSounds), keyEquivalent: "")
+        let reset = NSMenuItem(title: s(.soundReset), action: #selector(resetSounds), keyEquivalent: "")
         reset.target = self
         menu.addItem(reset)
         return menu
@@ -243,6 +239,14 @@ final class StatusBarController {
 
     @objc private func toggleSound() {
         settings.isSoundOn.toggle()
+        persist()
+    }
+
+    @objc private func selectUILanguage(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let language = UILanguage(rawValue: raw)
+        else { return }
+        settings.uiLanguage = language
         persist()
     }
 
@@ -300,7 +304,7 @@ final class StatusBarController {
         alert.informativeText = diag
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Открыть лог")
+        alert.addButton(withTitle: s(.openLog))
         let response = alert.runModal()
         if response == .alertSecondButtonReturn {
             let log = NSHomeDirectory() + "/Library/Logs/SwitcherSilicon.log"
