@@ -16,6 +16,9 @@ expect(ConversionEngine.convert("руддщ", direction: .auto) == "hello", "aut
 expect(ConversionEngine.convert("ntcn123", direction: .usToRussian) == "тест123", "ntcn123 -> тест123")
 expect(ConversionEngine.convert("test", direction: .usToRussian) == "еуые", "test -> еуые")
 expect(ConversionEngine.toggleCase("Привет") == "пРИВЕТ", "toggle case")
+expect(ConversionEngine.flipLayout("ghbdtn ,hfn") == "привет брат", "flip selection phrase")
+expect(ConversionEngine.flipLayout("привет брат") == "ghbdtn ,hfn", "flip selection back")
+expect(ConversionEngine.flipLayout("Ghbdtn!") == "Привет!", "flip keeps punctuation")
 
 let checker = LayoutChecker()
 expect(checker.check("ghbdtn") == .incorrect, "checker ghbdtn")
