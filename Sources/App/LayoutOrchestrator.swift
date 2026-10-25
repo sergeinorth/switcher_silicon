@@ -26,6 +26,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         self.settings = settings
         self.soundPlayer = SoundPlayer(settings: settings)
         self.checker = LayoutChecker(
+            validator: SystemWordValidator(),
             neverConvert: [],
             userRules: settings.userRules
         )
@@ -68,6 +69,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         self.settings = settings
         soundPlayer.settings = settings
         checker = LayoutChecker(
+            validator: SystemWordValidator(),
             neverConvert: undo.learnedNever,
             userRules: settings.userRules
         )
@@ -147,15 +149,25 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
 
     /// Prefer event unicode; fall back to US keycode map (event unicode is often empty in taps).
     private func resolvedGlyph(characters: String, keyCode: UInt16, shift: Bool) -> String? {
-        if characters.count == 1, let ch = characters.first, !WordDetector.isSeparator(ch) {
+        if characters.count == 1, let ch = characters.first, isBufferableGlyph(ch) {
             return String(ch)
         }
         if characters.count > 1 {
-            // Unusual multi-char — keep as-is if not separators.
-            let filtered = characters.filter { !WordDetector.isSeparator($0) }
+            let filtered = characters.filter(isBufferableGlyph)
             return filtered.isEmpty ? nil : String(filtered)
         }
         return KeyCodeMap.usCharacter(keyCode: keyCode, shift: shift)
+    }
+
+    private func isBufferableGlyph(_ ch: Character) -> Bool {
+        if WordDetector.isSeparator(ch) { return false }
+        // Drop control / zero-width junk that was polluting «ghbdtn» checks.
+        if ch.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) {
+            return false
+        }
+        return ch.isLetter
+            || ch == "," || ch == "." || ch == ";" || ch == "'" || ch == "[" || ch == "]" || ch == "`"
+            || ch == "<" || ch == ">" || ch == ":" || ch == "\"" || ch == "{" || ch == "}" || ch == "~"
     }
 
     // MARK: - Conversion
@@ -340,7 +352,11 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         }
         soundPlayer.play(.undo)
         undo.learnNever(last.original)
-        checker = LayoutChecker(neverConvert: undo.learnedNever, userRules: settings.userRules)
+        checker = LayoutChecker(
+            validator: SystemWordValidator(),
+            neverConvert: undo.learnedNever,
+            userRules: settings.userRules
+        )
         undo.clearLast()
     }
 
