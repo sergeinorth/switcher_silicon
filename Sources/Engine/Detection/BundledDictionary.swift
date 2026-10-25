@@ -39,7 +39,8 @@ public enum BundledDictionary: Sendable {
     }
 
     private static func load(resource: String) -> Set<String> {
-        // Prefer app Resources (packaged .app), then SwiftPM Bundle.module (swift run / tests).
+        // Prefer packaged .app Resources, then SwiftPM Bundle.module (swift run / tests).
+        // Important: only keep URLs that exist — appendingPathComponent always returns a URL.
         let candidates: [URL?] = [
             Bundle.main.url(forResource: resource, withExtension: "txt.gz", subdirectory: "Dictionaries"),
             Bundle.main.resourceURL?.appendingPathComponent("Dictionaries/\(resource).txt.gz"),
@@ -48,7 +49,9 @@ public enum BundledDictionary: Sendable {
             Bundle.main.url(forResource: resource, withExtension: "txt", subdirectory: "Dictionaries"),
             Bundle.module.url(forResource: resource, withExtension: "txt", subdirectory: "Dictionaries"),
         ]
-        guard let url = candidates.compactMap({ $0 }).first else {
+        guard let url = candidates.compactMap({ $0 }).first(where: {
+            FileManager.default.fileExists(atPath: $0.path)
+        }) else {
             return []
         }
         do {
