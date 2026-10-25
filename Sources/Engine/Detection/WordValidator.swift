@@ -4,18 +4,30 @@ public protocol WordValidator: Sendable {
     func isKnownWord(_ word: String) -> Bool
 }
 
-/// Built-in seed lists only.
+/// Built-in seed lists plus bundled open dictionaries.
 public struct SeedWordValidator: WordValidator {
-    private let words: Set<String>
+    private let extra: Set<String>
 
     public init(extra: Set<String> = []) {
-        self.words = SeedDictionary.russian
-            .union(SeedDictionary.english)
-            .union(extra)
+        self.extra = extra
     }
 
     public func isKnownWord(_ word: String) -> Bool {
-        words.contains(word.lowercased())
+        let lower = word.lowercased()
+        if extra.contains(lower) { return true }
+        if SeedDictionary.russian.contains(lower) || SeedDictionary.english.contains(lower) {
+            return true
+        }
+        // Large bundled lists (lazy-loaded once).
+        switch ConversionEngine.dominantScript(lower) {
+        case .cyrillic:
+            return BundledDictionary.sharedRussian.contains(lower)
+        case .latin:
+            return BundledDictionary.sharedEnglish.contains(lower)
+        case .mixed, .other:
+            return BundledDictionary.sharedRussian.contains(lower)
+                || BundledDictionary.sharedEnglish.contains(lower)
+        }
     }
 }
 

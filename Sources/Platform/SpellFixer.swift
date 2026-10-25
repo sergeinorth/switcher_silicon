@@ -9,14 +9,16 @@ import Engine
 ///   (Apple guess ∩ seed, or phonetic / keyboard / transposition → seed)
 public struct SpellFixer: @unchecked Sendable {
     private let validator = SystemWordValidator()
-    private let seed = SeedWordValidator()
 
     public init() {}
 
     public func suggestion(for word: String) -> String? {
         let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 4 else { return nil }
-        if validator.isKnownWord(trimmed) || seed.isKnownWord(trimmed) { return nil }
+        // Already real (full morph dict / system) — never "fix".
+        if validator.isKnownWord(trimmed) || BundledDictionary.isSpellAcceptable(trimmed) {
+            return nil
+        }
 
         let script = ConversionEngine.dominantScript(trimmed)
         let language: String
@@ -26,9 +28,7 @@ public struct SpellFixer: @unchecked Sendable {
         case .mixed, .other: return nil
         }
 
-        if let s = fromAppleGuesses(trimmed, language: language) {
-            return applyCase(of: trimmed, to: s)
-        }
+        // Phonetic / keyboard first: Apple RU guesses often prefer rare junk («пресет»).
         if let s = fromPhoneticSwaps(trimmed) {
             return applyCase(of: trimmed, to: s)
         }
@@ -36,6 +36,9 @@ public struct SpellFixer: @unchecked Sendable {
             return applyCase(of: trimmed, to: s)
         }
         if let s = fromKeyboardSwaps(trimmed, script: script) {
+            return applyCase(of: trimmed, to: s)
+        }
+        if let s = fromAppleGuesses(trimmed, language: language) {
             return applyCase(of: trimmed, to: s)
         }
         return nil
@@ -69,11 +72,12 @@ public struct SpellFixer: @unchecked Sendable {
         let close = guesses.filter { g in
             EditDistance.between(lower, g.lowercased(), limit: 1) == 1
         }
-        let seedHits = close.filter { seed.isKnownWord($0) }
-        if seedHits.count == 1, let only = seedHits.first, only.lowercased() != lower {
+        // Only accept high-frequency / curated targets (not the full morph dump).
+        let acceptHits = close.filter { BundledDictionary.isSpellAcceptable($0) }
+        if acceptHits.count == 1, let only = acceptHits.first, only.lowercased() != lower {
             return only
         }
-        // English Apple dictionary is reliable enough for a unique distance-1 hit.
+        // English: unique distance-1 Apple guess that is a known word.
         if language == "en" {
             let known = close.filter { validator.isKnownWord($0) }
             if known.count == 1, let only = known.first, only.lowercased() != lower {
@@ -103,7 +107,7 @@ public struct SpellFixer: @unchecked Sendable {
         for i in 0..<(chars.count - 1) {
             chars.swapAt(i, i + 1)
             let candidate = String(chars)
-            if seed.isKnownWord(candidate) {
+            if BundledDictionary.isSpellAcceptable(candidate) {
                 hits.insert(candidate)
             }
             chars.swapAt(i, i + 1)
@@ -135,7 +139,7 @@ public struct SpellFixer: @unchecked Sendable {
                 var copy = chars
                 copy[i] = alt
                 let candidate = String(copy)
-                if seed.isKnownWord(candidate) {
+                if BundledDictionary.isSpellAcceptable(candidate) {
                     hits.insert(candidate)
                 }
             }
