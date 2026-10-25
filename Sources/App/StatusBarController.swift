@@ -1,5 +1,4 @@
 import AppKit
-import ApplicationServices
 import Engine
 import Platform
 
@@ -39,8 +38,14 @@ final class StatusBarController {
         }
     }
 
+    func refreshPermissionState() {
+        lastTitle = ""
+        refreshLayoutTitle()
+        rebuildMenu()
+    }
+
     private func layoutTitle() -> String {
-        if !AXIsProcessTrusted() { return "!" }
+        // Real readiness = event tap is up. AXIsProcessTrusted alone is unreliable for ad-hoc builds.
         if !orchestrator.isTapActive { return "!" }
         return inputSources.isCurrentRussian ? "РУ" : "EN"
     }
@@ -64,12 +69,20 @@ final class StatusBarController {
         menu.addItem(layoutItem)
 
         let axItem = NSMenuItem(
-            title: AXIsProcessTrusted() ? "Accessibility: ок" : "Accessibility: НЕТ",
+            title: AccessibilityPermission.isAXTrusted ? "Универсальный доступ: ок" : "Универсальный доступ: НЕТ",
             action: nil,
             keyEquivalent: ""
         )
         axItem.isEnabled = false
         menu.addItem(axItem)
+
+        let listenItem = NSMenuItem(
+            title: AccessibilityPermission.canListenEvents ? "Мониторинг ввода: ок" : "Мониторинг ввода: НЕТ",
+            action: nil,
+            keyEquivalent: ""
+        )
+        listenItem.isEnabled = false
+        menu.addItem(listenItem)
 
         let tapItem = NSMenuItem(
             title: orchestrator.isTapActive ? "Event tap: ок" : "Event tap: НЕТ",
@@ -114,7 +127,11 @@ final class StatusBarController {
         diagItem.target = self
         menu.addItem(diagItem)
 
-        let accessItem = NSMenuItem(title: "Открыть доступность…", action: #selector(openAccessibility), keyEquivalent: "")
+        let listenSettings = NSMenuItem(title: "Открыть Мониторинг ввода…", action: #selector(openInputMonitoring), keyEquivalent: "")
+        listenSettings.target = self
+        menu.addItem(listenSettings)
+
+        let accessItem = NSMenuItem(title: "Открыть Универсальный доступ…", action: #selector(openAccessibility), keyEquivalent: "")
         accessItem.target = self
         menu.addItem(accessItem)
 
@@ -173,7 +190,11 @@ final class StatusBarController {
     }
 
     @objc private func openAccessibility() {
-        AccessibilityPermission.openSettings()
+        AccessibilityPermission.openAccessibilitySettings()
+    }
+
+    @objc private func openInputMonitoring() {
+        AccessibilityPermission.openInputMonitoringSettings()
     }
 
     @objc private func showDiagnostics() {
