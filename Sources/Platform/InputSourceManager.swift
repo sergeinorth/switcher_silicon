@@ -95,48 +95,30 @@ public final class InputSourceManager: @unchecked Sendable {
         guard let source = list.first(where: { id(of: $0) == sourceID }) else {
             return false
         }
-        let status = TISSelectInputSource(source)
-        guard status == noErr else { return false }
-        // TIS can report success before the session layout actually flips.
-        usleep(12_000)
-        return currentSourceID == sourceID || matchesScript(sourceID: sourceID)
-    }
-
-    /// Select and verify; one retry — convert path used to leave EN stuck while pasting RU.
-    @discardableResult
-    public func selectVerified(sourceID: String) -> Bool {
-        if select(sourceID: sourceID) { return true }
-        usleep(25_000)
-        return select(sourceID: sourceID)
-    }
-
-    private func matchesScript(sourceID: String) -> Bool {
-        // Accept any RU layout when we asked for RU (IDs may differ: Russian vs RussianWin).
-        if isRussianID(sourceID) { return isCurrentRussian }
-        if !isRussianID(sourceID) { return !isCurrentRussian }
-        return false
+        // No usleep here — blocking the event-tap/main thread dropped the next Space convert.
+        return TISSelectInputSource(source) == noErr
     }
 
     @discardableResult
     public func switchToRussian(preferredID: String?) -> Bool {
-        if let preferredID, !preferredID.isEmpty, selectVerified(sourceID: preferredID) {
+        if let preferredID, !preferredID.isEmpty, select(sourceID: preferredID) {
             return true
         }
-        if let id = preferRussianID(), selectVerified(sourceID: id) {
-            return true
+        if let id = preferRussianID() {
+            return select(sourceID: id)
         }
-        return isCurrentRussian
+        return false
     }
 
     @discardableResult
     public func switchToEnglish(preferredID: String?) -> Bool {
-        if let preferredID, !preferredID.isEmpty, selectVerified(sourceID: preferredID) {
+        if let preferredID, !preferredID.isEmpty, select(sourceID: preferredID) {
             return true
         }
-        if let id = preferEnglishID(), selectVerified(sourceID: id) {
-            return true
+        if let id = preferEnglishID() {
+            return select(sourceID: id)
         }
-        return !isCurrentRussian
+        return false
     }
 
     @discardableResult

@@ -64,6 +64,14 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         return ok
     }
 
+    /// User flipped layout via menu bar / Caps — keep per-app memory in sync so we do not yank it back.
+    func noteExternalLayoutChange() {
+        guard !isConverting, !EventSynth.isSynthesizing else { return }
+        guard let bundle = cachedFrontBundleID ?? FrontmostApp.bundleID else { return }
+        if bundle == Bundle.main.bundleIdentifier { return }
+        appLayouts[bundle] = inputSources.currentSourceID
+    }
+
     func stop() {
         eventTap.stop()
         onStatusChange?("stopped")
@@ -144,7 +152,12 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         // Auto-convert ONLY on Space / Tab / Enter (not on , . ; which are RU letters).
         if WordDetector.isSeparatorKeyCode(keyCode) {
             if busy {
-                buffer.clear()
+                // Keep the word for Option / next attempt — clearing here ate auto-convert.
+                if !buffer.isEmpty {
+                    pendingFinishedWord = buffer.stringValue
+                    lastBufferedWord = buffer.stringValue
+                    buffer.clear()
+                }
                 return Unmanaged.passUnretained(event)
             }
             // Swallow Space when we convert: avoid race (first letter left behind).
@@ -806,6 +819,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         } else {
             ok = inputSources.switchToEnglish(preferredID: settings.englishLayoutID)
         }
+        // Brief settle only — long verify sleeps blocked the tap and killed the next auto-convert.
+        if ok { usleep(8_000) }
         let after = inputSources.currentSourceID
         let matched = wantRussian ? inputSources.isCurrentRussian : !inputSources.isCurrentRussian
         if !ok || !matched {
@@ -815,11 +830,17 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         } else if before != after {
             AppLog.line("layout \(reason) \(before) → \(after)")
         }
-        if matched, let bundle = cachedFrontBundleID ?? FrontmostApp.bundleID {
-            appLayouts[bundle] = after
+        // Remember the *intended* layout even if TIS lags — stops per-app restore from snapping back.
+        if let bundle = cachedFrontBundleID ?? FrontmostApp.bundleID,
+           bundle != Bundle.main.bundleIdentifier
+        {
+            let intended = wantRussian
+                ? (settings.russianLayoutID.isEmpty ? after : settings.russianLayoutID)
+                : (settings.englishLayoutID.isEmpty ? after : settings.englishLayoutID)
+            appLayouts[bundle] = intended.isEmpty ? after : intended
             cachedFrontBundleID = bundle
         }
-        return matched
+        return ok || matched
     }
 
     /// Gunzip + build ~2M-word Sets off the typing path (first Space used to hitch).

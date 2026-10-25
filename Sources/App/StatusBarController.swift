@@ -26,6 +26,7 @@ final class StatusBarController {
         rebuildMenu()
         inputSources.observeLayoutChanges { [weak self] in
             Task { @MainActor in
+                self?.orchestrator.noteExternalLayoutChange()
                 self?.refreshLayoutTitle()
             }
         }
