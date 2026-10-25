@@ -25,7 +25,23 @@ public final class InputSourceManager: @unchecked Sendable {
 
     public var isCurrentRussian: Bool {
         let id = currentSourceID.lowercased()
-        return id.contains("russian") || id.contains("cyrillic") || id.contains(".ru")
+        if id.contains("russian") || id.contains("cyrillic") || id.contains("ukrain")
+            || id.contains("belarus") || id.contains("bulgar") || id.contains("serbian")
+        {
+            return true
+        }
+        // Fallback: localized name
+        if let name = currentSourceName?.lowercased() {
+            return name.contains("рус") || name.contains("russian") || name.contains("укра")
+        }
+        return false
+    }
+
+    public var currentSourceName: String? {
+        guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else {
+            return nil
+        }
+        return name(of: source)
     }
 
     public func availableSources() -> [(id: String, name: String)] {

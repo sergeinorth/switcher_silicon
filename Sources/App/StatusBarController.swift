@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Engine
 import Platform
 
@@ -9,6 +10,8 @@ final class StatusBarController {
     private let inputSources = InputSourceManager()
     private var settings: AppSettings
     private var flashToken = 0
+    private var layoutPoll: Timer?
+    private var lastTitle = ""
 
     init(orchestrator: LayoutOrchestrator) {
         self.orchestrator = orchestrator
@@ -23,6 +26,12 @@ final class StatusBarController {
                 self?.refreshLayoutTitle()
             }
         }
+        // Notifications are flaky ~1/5 — poll as source of truth.
+        layoutPoll = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshLayoutTitle()
+            }
+        }
         orchestrator.onStatusChange = { [weak self] status in
             Task { @MainActor in
                 self?.reflectStatus(status)
@@ -31,23 +40,45 @@ final class StatusBarController {
     }
 
     private func layoutTitle() -> String {
-        inputSources.isCurrentRussian ? "РУ" : "EN"
+        if !AXIsProcessTrusted() { return "!" }
+        if !orchestrator.isTapActive { return "!" }
+        return inputSources.isCurrentRussian ? "РУ" : "EN"
     }
 
     private func refreshLayoutTitle() {
-        item.button?.title = layoutTitle()
+        let title = layoutTitle()
+        guard title != lastTitle else { return }
+        lastTitle = title
+        item.button?.title = title
     }
 
     private func rebuildMenu() {
         let menu = NSMenu()
 
         let layoutItem = NSMenuItem(
-            title: "Раскладка: \(layoutTitle())",
+            title: "Раскладка: \(inputSources.isCurrentRussian ? "РУ" : "EN")",
             action: nil,
             keyEquivalent: ""
         )
         layoutItem.isEnabled = false
         menu.addItem(layoutItem)
+
+        let axItem = NSMenuItem(
+            title: AXIsProcessTrusted() ? "Accessibility: ок" : "Accessibility: НЕТ",
+            action: nil,
+            keyEquivalent: ""
+        )
+        axItem.isEnabled = false
+        menu.addItem(axItem)
+
+        let tapItem = NSMenuItem(
+            title: orchestrator.isTapActive ? "Event tap: ок" : "Event tap: НЕТ",
+            action: nil,
+            keyEquivalent: ""
+        )
+        tapItem.isEnabled = false
+        menu.addItem(tapItem)
+
         menu.addItem(.separator())
 
         let autoItem = NSMenuItem(
@@ -79,6 +110,10 @@ final class StatusBarController {
 
         menu.addItem(.separator())
 
+        let diagItem = NSMenuItem(title: "Диагностика…", action: #selector(showDiagnostics), keyEquivalent: "")
+        diagItem.target = self
+        menu.addItem(diagItem)
+
         let accessItem = NSMenuItem(title: "Открыть доступность…", action: #selector(openAccessibility), keyEquivalent: "")
         accessItem.target = self
         menu.addItem(accessItem)
@@ -100,16 +135,19 @@ final class StatusBarController {
         if status.hasPrefix("auto:") || status.hasPrefix("manual:") {
             flashToken += 1
             let token = flashToken
+            lastTitle = "✓"
             item.button?.title = "✓"
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 guard let self, self.flashToken == token else { return }
+                self.lastTitle = ""
                 self.refreshLayoutTitle()
             }
-        } else if status == "no-tap" {
-            item.button?.title = "!"
         } else {
+            lastTitle = ""
             refreshLayoutTitle()
         }
+        // Refresh diagnostic labels next open.
+        rebuildMenu()
     }
 
     @objc private func toggleAuto() {
@@ -136,6 +174,21 @@ final class StatusBarController {
 
     @objc private func openAccessibility() {
         AccessibilityPermission.openSettings()
+    }
+
+    @objc private func showDiagnostics() {
+        let diag = orchestrator.diagnostics()
+        let alert = NSAlert()
+        alert.messageText = "Switcher Silicon"
+        alert.informativeText = diag
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Открыть лог")
+        let response = alert.runModal()
+        if response == .alertSecondButtonReturn {
+            let log = NSHomeDirectory() + "/Library/Logs/SwitcherSilicon.log"
+            NSWorkspace.shared.open(URL(fileURLWithPath: log))
+        }
     }
 
     @objc private func excludeFrontApp() {
