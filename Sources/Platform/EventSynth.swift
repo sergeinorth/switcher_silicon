@@ -5,6 +5,8 @@ public enum EventSynth {
     private static let sourceID: Int64 = 0x53575349 // 'SWSI'
 
     nonisolated(unsafe) public static var isSynthesizing = false
+    /// Option-alone detector ignores taps until this time (set after Option+Delete replace).
+    nonisolated(unsafe) public static var ignoreOptionUntil: CFAbsoluteTime = 0
 
     public static func markAsOurs(_ event: CGEvent) {
         event.setIntegerValueField(.eventSourceUserData, value: sourceID)
@@ -59,6 +61,10 @@ public enum EventSynth {
         defer {
             usleep(2_000)
             isSynthesizing = false
+            // Word-delete posts Option modifiers; suppress phantom Option-alone taps briefly.
+            if useWordDelete {
+                ignoreOptionUntil = CFAbsoluteTimeGetCurrent() + 0.30
+            }
         }
         AppLog.line(
             "replace delete=\(deleteCount) text=\(newText) wordDel=\(useWordDelete) sp=\(trailingSpaceInField)"

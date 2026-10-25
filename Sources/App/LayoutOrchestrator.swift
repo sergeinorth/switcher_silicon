@@ -200,6 +200,10 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
 
     func eventTapDidDetectOptionTap() {
         guard settings.useOptionTrigger else { return }
+        if isConverting || EventSynth.isSynthesizing || CFAbsoluteTimeGetCurrent() < EventSynth.ignoreOptionUntil {
+            AppLog.line("option ignored: synth/convert")
+            return
+        }
         let now = CFAbsoluteTimeGetCurrent()
         // Debounce: repeated Option taps were eating the buffer then pasting an old clipboard word.
         if now - lastOptionAt < 0.20 {

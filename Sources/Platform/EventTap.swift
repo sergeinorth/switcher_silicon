@@ -75,7 +75,10 @@ public final class EventTap {
             return Unmanaged.passUnretained(event)
         }
 
-        if EventSynth.isOurs(event) {
+        // Synthetic Option+Delete (word erase) must not look like a user Option tap —
+        // otherwise we auto-convert then immediately toggle/revert ("works every other time").
+        if EventSynth.isOurs(event) || EventSynth.isSynthesizing {
+            cancelOptionAlone()
             return Unmanaged.passUnretained(event)
         }
 
@@ -110,7 +113,16 @@ public final class EventTap {
         }
     }
 
+    private func cancelOptionAlone() {
+        optionDownAt = nil
+        optionAlone = false
+    }
+
     private func trackOptionTap(_ event: CGEvent) {
+        if EventSynth.isSynthesizing || CFAbsoluteTimeGetCurrent() < EventSynth.ignoreOptionUntil {
+            cancelOptionAlone()
+            return
+        }
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let flags = event.flags
         let isOptionKey = keyCode == 58 || keyCode == 61
@@ -131,10 +143,16 @@ public final class EventTap {
         optionDownAt = nil
         let alone = optionAlone
         optionAlone = false
+        if EventSynth.isSynthesizing || CFAbsoluteTimeGetCurrent() < EventSynth.ignoreOptionUntil {
+            return
+        }
         // Up to 0.6s quick tap, no other keys.
         if alone && duration < 0.60 {
             nonisolated(unsafe) let del = self.delegate
             DispatchQueue.main.async {
+                if EventSynth.isSynthesizing || CFAbsoluteTimeGetCurrent() < EventSynth.ignoreOptionUntil {
+                    return
+                }
                 del?.eventTapDidDetectOptionTap()
             }
         }
