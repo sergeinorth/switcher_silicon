@@ -1,7 +1,6 @@
 import AppKit
 import Engine
 import Platform
-import ServiceManagement
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -32,9 +31,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        if settings.launchesOnStartup {
-            configureLaunchAtLogin(true)
-        }
+        // Sync login item with saved preference (menu can change it later).
+        _ = LaunchAtLogin.setEnabled(settings.launchesOnStartup)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -78,15 +76,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func configureLaunchAtLogin(_ enabled: Bool) {
-        do {
-            if enabled {
-                try SMAppService.mainApp.register()
-            } else {
-                try SMAppService.mainApp.unregister()
-            }
-        } catch {
-            AppLog.line("login item error: \(error)")
-        }
-    }
 }

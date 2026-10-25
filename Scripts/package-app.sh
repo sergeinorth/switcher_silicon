@@ -31,6 +31,9 @@ mkdir -p "$BUILD_APP/Contents/MacOS" "$BUILD_APP/Contents/Resources"
 cp "$BIN" "$BUILD_APP/Contents/MacOS/${BIN_NAME}"
 cp Resources/Info.plist "$BUILD_APP/Contents/Info.plist"
 printf 'APPL????' > "$BUILD_APP/Contents/PkgInfo"
+if [[ -f Resources/AppIcon.icns ]]; then
+  cp Resources/AppIcon.icns "$BUILD_APP/Contents/Resources/AppIcon.icns"
+fi
 
 # Dictionaries for Bundle.main (avoid copying SPM *.bundle — codesign rejects them).
 if [[ -d Sources/Engine/Resources/Dictionaries ]]; then

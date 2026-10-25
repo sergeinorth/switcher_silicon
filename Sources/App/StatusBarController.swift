@@ -131,6 +131,14 @@ final class StatusBarController {
         soundsMenu.submenu = buildSoundsSubmenu()
         menu.addItem(soundsMenu)
 
+        let launchItem = NSMenuItem(
+            title: settings.launchesOnStartup ? s(.launchOn) : s(.launchOff),
+            action: #selector(toggleLaunchAtLogin),
+            keyEquivalent: ""
+        )
+        launchItem.target = self
+        menu.addItem(launchItem)
+
         let langMenu = NSMenuItem(title: s(.language), action: nil, keyEquivalent: "")
         let langSub = NSMenu()
         for option in UILanguage.allCases {
@@ -240,6 +248,18 @@ final class StatusBarController {
     @objc private func toggleSound() {
         settings.isSoundOn.toggle()
         persist()
+    }
+
+    @objc private func toggleLaunchAtLogin() {
+        let enabled = !settings.launchesOnStartup
+        if LaunchAtLogin.setEnabled(enabled) {
+            settings.launchesOnStartup = enabled
+            persist()
+        } else {
+            // Keep UI in sync with system if registration failed (e.g. not from /Applications).
+            settings.launchesOnStartup = LaunchAtLogin.isEnabled
+            persist()
+        }
     }
 
     @objc private func selectUILanguage(_ sender: NSMenuItem) {

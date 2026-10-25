@@ -24,6 +24,8 @@ enum L10n {
         case soundOn
         case soundOff
         case soundPicker
+        case launchOn
+        case launchOff
         case undoLast
         case changeCase
         case diagnostics
@@ -60,6 +62,8 @@ enum L10n {
             case .soundOn: return "Звуки: вкл"
             case .soundOff: return "Звуки: выкл"
             case .soundPicker: return "Выбор звуков"
+            case .launchOn: return "Запуск при входе: вкл"
+            case .launchOff: return "Запуск при входе: выкл"
             case .undoLast: return "Отменить последнюю конвертацию"
             case .changeCase: return "Сменить регистр"
             case .diagnostics: return "Диагностика…"
@@ -109,6 +113,8 @@ enum L10n {
             case .soundOn: return "Sounds: on"
             case .soundOff: return "Sounds: off"
             case .soundPicker: return "Sound picker"
+            case .launchOn: return "Launch at login: on"
+            case .launchOff: return "Launch at login: off"
             case .undoLast: return "Undo last conversion"
             case .changeCase: return "Change case"
             case .diagnostics: return "Diagnostics…"
