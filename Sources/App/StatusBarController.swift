@@ -6,16 +6,23 @@ import Platform
 final class StatusBarController {
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let orchestrator: LayoutOrchestrator
+    private let inputSources = InputSourceManager()
     private var settings: AppSettings
+    private var flashToken = 0
 
     init(orchestrator: LayoutOrchestrator) {
         self.orchestrator = orchestrator
         self.settings = orchestrator.currentSettings
         if let button = item.button {
-            button.title = "РУ"
             button.toolTip = "Switcher Silicon"
         }
+        refreshLayoutTitle()
         rebuildMenu()
+        inputSources.observeLayoutChanges { [weak self] in
+            Task { @MainActor in
+                self?.refreshLayoutTitle()
+            }
+        }
         orchestrator.onStatusChange = { [weak self] status in
             Task { @MainActor in
                 self?.reflectStatus(status)
@@ -23,8 +30,25 @@ final class StatusBarController {
         }
     }
 
+    private func layoutTitle() -> String {
+        inputSources.isCurrentRussian ? "РУ" : "EN"
+    }
+
+    private func refreshLayoutTitle() {
+        item.button?.title = layoutTitle()
+    }
+
     private func rebuildMenu() {
         let menu = NSMenu()
+
+        let layoutItem = NSMenuItem(
+            title: "Раскладка: \(layoutTitle())",
+            action: nil,
+            keyEquivalent: ""
+        )
+        layoutItem.isEnabled = false
+        menu.addItem(layoutItem)
+        menu.addItem(.separator())
 
         let autoItem = NSMenuItem(
             title: settings.isAutocorrectionActive ? "Автоконвертация: вкл" : "Автоконвертация: выкл",
@@ -73,17 +97,18 @@ final class StatusBarController {
     }
 
     private func reflectStatus(_ status: String) {
-        if let button = item.button {
-            if status.hasPrefix("auto:") || status.hasPrefix("manual:") {
-                button.title = "✓"
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-                    self?.item.button?.title = "РУ"
-                }
-            } else if status == "no-tap" {
-                button.title = "!"
-            } else {
-                button.title = "РУ"
+        if status.hasPrefix("auto:") || status.hasPrefix("manual:") {
+            flashToken += 1
+            let token = flashToken
+            item.button?.title = "✓"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self, self.flashToken == token else { return }
+                self.refreshLayoutTitle()
             }
+        } else if status == "no-tap" {
+            item.button?.title = "!"
+        } else {
+            refreshLayoutTitle()
         }
     }
 

@@ -5,6 +5,17 @@ import Engine
 public final class InputSourceManager: @unchecked Sendable {
     public init() {}
 
+    /// Fires on the main queue when the user (or we) change the keyboard layout.
+    public func observeLayoutChanges(_ handler: @escaping () -> Void) {
+        DistributedNotificationCenter.default.addObserver(
+            forName: NSNotification.Name("com.apple.Carbon.TISNotifySelectedKeyboardInputSourceChanged"),
+            object: nil,
+            queue: .main
+        ) { _ in
+            handler()
+        }
+    }
+
     public var currentSourceID: String {
         guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else {
             return ""
