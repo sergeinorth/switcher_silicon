@@ -60,6 +60,15 @@ public enum ConversionEngine: Sendable {
         }
     }
 
+    /// Flip each mappable character EN↔RU (for selections that may mix scripts/spaces).
+    public static func flipLayout(_ text: String) -> String {
+        String(text.map { ch in
+            if let ru = usToRu[ch] { return ru }
+            if let us = ruToUs[ch] { return us }
+            return ch
+        })
+    }
+
     public static func toggleCase(_ text: String) -> String {
         String(text.map { ch in
             if ch.isUppercase { return Character(ch.lowercased()) }

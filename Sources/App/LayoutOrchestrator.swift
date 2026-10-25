@@ -15,13 +15,22 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     private var appLayouts: [String: String] = [:]
     private var lastFrontBundle: String?
     private var isConverting = false
-    private var conversionGeneration = 0
     private var lastBufferedWord = ""
-    /// Word completed by Space; valid until next glyph (for forced Option convert).
+    /// Word completed by Space; used only if there is no toggleable snapshot yet.
     private var pendingFinishedWord: String?
     private var lastCheckResult = "—"
     private var keyEventCount = 0
     private var lastOptionAt: CFAbsoluteTime = 0
+    private var replaceQueue: [ReplaceJob] = []
+
+    private struct ReplaceJob {
+        var original: String
+        var converted: String
+        var deleteCount: Int
+        var suffix: String
+        var automatic: Bool
+        var switchLayout: Bool
+    }
 
     var onStatusChange: ((String) -> Void)?
     var isTapActive: Bool { eventTap.isEnabled }
@@ -155,14 +164,16 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         guard settings.useOptionTrigger else { return }
         let now = CFAbsoluteTimeGetCurrent()
         // Debounce: repeated Option taps were eating the buffer then pasting an old clipboard word.
-        if now - lastOptionAt < 0.35 {
+        if now - lastOptionAt < 0.20 {
             AppLog.line("option debounced")
             return
         }
         lastOptionAt = now
-        AppLog.line("option tap buffer=«\(buffer.stringValue)» pending=«\(pendingFinishedWord ?? "")»")
+        AppLog.line(
+            "option tap buffer=«\(buffer.stringValue)» pending=«\(pendingFinishedWord ?? "")» undo=\(undo.last.map { "\($0.showingConverted ? "shown" : "reverted"):\($0.converted)" } ?? "nil")"
+        )
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self] in
-            self?.convertLastWord(manual: true)
+            self?.handleOptionTap()
         }
     }
 
@@ -196,6 +207,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         let word = buffer.stringValue
         buffer.clear()
         lastBufferedWord = word
+        // New word boundary — drop previous toggle target.
+        undo.clearLast()
         pendingFinishedWord = word
 
         if skipNextWord {
@@ -212,13 +225,11 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             AppLog.line("word too short «\(word)»")
             return
         }
-        // Auto layout / spell only on Space for reliable replace.
         guard separatorKeyCode == 49 else { return }
 
         let sep = " "
         let deleteCount = word.count + 1
 
-        // 1) Layout fix
         if settings.isAutocorrectionActive {
             let check = checker.check(word)
             lastCheckResult = "\(check) for «\(word)»"
@@ -226,8 +237,9 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             if check == .incorrect {
                 let converted = ConversionEngine.convert(word, direction: .auto)
                 if converted != word {
+                    AppLog.line("schedule layout «\(word)» -> «\(converted)»")
                     pendingFinishedWord = nil
-                    scheduleReplacement(
+                    enqueueReplacement(
                         original: word,
                         converted: converted,
                         deleteCount: deleteCount,
@@ -240,11 +252,10 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             }
         }
 
-        // 2) Conservative typo fix (off by default)
         if settings.isSpellAutocorrectActive, let fixed = spellFixer.suggestion(for: word), fixed != word {
             AppLog.line("spell «\(word)» -> «\(fixed)»")
             pendingFinishedWord = nil
-            scheduleReplacement(
+            enqueueReplacement(
                 original: word,
                 converted: fixed,
                 deleteCount: deleteCount,
@@ -255,7 +266,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         }
     }
 
-    private func scheduleReplacement(
+    private func enqueueReplacement(
         original: String,
         converted: String,
         deleteCount: Int,
@@ -263,11 +274,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         automatic: Bool,
         switchLayout: Bool
     ) {
-        conversionGeneration += 1
-        let generation = conversionGeneration
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            guard let self, generation == self.conversionGeneration else { return }
-            self.performReplacement(
+        replaceQueue.append(
+            ReplaceJob(
                 original: original,
                 converted: converted,
                 deleteCount: deleteCount,
@@ -275,11 +283,34 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                 automatic: automatic,
                 switchLayout: switchLayout
             )
+        )
+        pumpReplaceQueue()
+    }
+
+    private func pumpReplaceQueue() {
+        guard !isConverting, !replaceQueue.isEmpty else { return }
+        let job = replaceQueue.removeFirst()
+        // Let the space key commit in the target app first.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) { [weak self] in
+            guard let self else { return }
+            self.performReplacement(
+                original: job.original,
+                converted: job.converted,
+                deleteCount: job.deleteCount,
+                suffix: job.suffix,
+                automatic: job.automatic,
+                switchLayout: job.switchLayout
+            )
+            self.pumpReplaceQueue()
         }
     }
 
-    /// Option: force-convert current/pending word; if the last change was automatic — revert it.
-    private func convertLastWord(manual: Bool) {
+    /// Option:
+    /// 1) typed buffer → force convert
+    /// 2) selected text (AX, else ⌘C probe) → flip whole selection
+    /// 3) toggle last conversion
+    /// 4) pending word after Space
+    private func handleOptionTap() {
         guard !isConverting else {
             AppLog.line("option ignored: busy converting")
             return
@@ -287,38 +318,41 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
 
         let fromBuffer = buffer.stringValue
 
-        // After auto-convert (buffer empty): Option restores the previous word.
-        if fromBuffer.isEmpty,
-           pendingFinishedWord == nil,
-           let last = undo.last,
-           last.wasAutomatic,
-           last.showingConverted
-        {
-            AppLog.line("option revert auto «\(last.converted)» -> «\(last.original)»")
-            revertAutomaticConversion(last)
-            return
-        }
-
-        let word: String
-        let deleteCount: Int
-        let suffix: String
         if fromBuffer.count >= 1 {
-            word = fromBuffer
-            deleteCount = Array(word).count
-            suffix = ""
+            let word = fromBuffer
             buffer.clear()
             pendingFinishedWord = nil
-        } else if let finished = pendingFinishedWord, finished.count >= 1 {
-            word = finished
-            deleteCount = Array(word).count + 1
-            suffix = " "
-            pendingFinishedWord = nil
-        } else {
-            AppLog.line("option: nothing to convert")
-            soundPlayer.play(.undo)
+            forceConvert(word: word, deleteCount: Array(word).count, suffix: "")
             return
         }
 
+        if convertSelectionIfAny() {
+            return
+        }
+
+        // Toggle last conversion (fixes "Option only reverts once").
+        if let last = undo.last {
+            if last.showingConverted {
+                AppLog.line("option toggle → original «\(last.converted)» -> «\(last.original)»")
+                applySnapshot(last, showConverted: false)
+            } else {
+                AppLog.line("option toggle → converted «\(last.original)» -> «\(last.converted)»")
+                applySnapshot(last, showConverted: true)
+            }
+            return
+        }
+
+        if let finished = pendingFinishedWord, finished.count >= 1 {
+            pendingFinishedWord = nil
+            forceConvert(word: finished, deleteCount: Array(finished).count + 1, suffix: " ")
+            return
+        }
+
+        AppLog.line("option: nothing to convert")
+        soundPlayer.play(.undo)
+    }
+
+    private func forceConvert(word: String, deleteCount: Int, suffix: String) {
         let converted = ConversionEngine.convert(word, direction: .auto)
         guard converted != word else {
             AppLog.line("option: convert noop for «\(word)»")
@@ -327,7 +361,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         }
         skipNextWord = false
         AppLog.line("option convert «\(word)» -> «\(converted)» delete=\(deleteCount)")
-        performReplacement(
+        enqueueReplacement(
             original: word,
             converted: converted,
             deleteCount: deleteCount,
@@ -337,35 +371,50 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         )
     }
 
-    private func revertAutomaticConversion(_ last: ConversionSnapshot) {
+    private func applySnapshot(_ last: ConversionSnapshot, showConverted: Bool) {
         isConverting = true
-        defer { isConverting = false }
-
-        let space = last.hadTrailingSpace
-        let deleteCount = Array(last.converted).count + (space ? 1 : 0)
-        let restore = last.original + (space ? " " : "")
-
-        // Restore layout that matched the original mistype.
-        switch ConversionEngine.dominantScript(last.original) {
-        case .latin:
-            _ = inputSources.switchToEnglish(preferredID: settings.englishLayoutID)
-        case .cyrillic:
-            _ = inputSources.switchToRussian(preferredID: settings.russianLayoutID)
-        case .mixed, .other:
-            break
+        defer {
+            isConverting = false
+            pumpReplaceQueue()
         }
 
-        soundPlayer.play(.undo)
+        let space = last.hadTrailingSpace
+        let from = showConverted ? last.original : last.converted
+        let to = showConverted ? last.converted : last.original
+        let deleteCount = Array(from).count + (space ? 1 : 0)
+        let text = to + (space ? " " : "")
+
+        if showConverted {
+            let toRussian = ConversionEngine.dominantScript(last.original) == .latin
+                || ConversionEngine.dominantScript(last.converted) == .cyrillic
+            if toRussian {
+                _ = inputSources.switchToRussian(preferredID: settings.russianLayoutID)
+                soundPlayer.play(.switchToRussian)
+            } else {
+                _ = inputSources.switchToEnglish(preferredID: settings.englishLayoutID)
+                soundPlayer.play(.switchToEnglish)
+            }
+        } else {
+            switch ConversionEngine.dominantScript(last.original) {
+            case .latin:
+                _ = inputSources.switchToEnglish(preferredID: settings.englishLayoutID)
+            case .cyrillic:
+                _ = inputSources.switchToRussian(preferredID: settings.russianLayoutID)
+            case .mixed, .other:
+                break
+            }
+            soundPlayer.play(.undo)
+        }
+
         usleep(15_000)
-        EventSynth.replaceCharacters(deleteCount: deleteCount, with: restore)
+        EventSynth.replaceCharacters(deleteCount: deleteCount, with: text)
 
         var updated = last
-        updated.showingConverted = false
+        updated.showingConverted = showConverted
         undo.remember(updated)
-        // Allow Option to force-convert again (same as pending word after space).
-        pendingFinishedWord = last.original
+        pendingFinishedWord = nil
         buffer.clear()
-        onStatusChange?("revert:\(last.original)")
+        onStatusChange?(showConverted ? "toggle:\(last.converted)" : "revert:\(last.original)")
     }
 
     private func performReplacement(
@@ -376,7 +425,21 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         automatic: Bool,
         switchLayout: Bool
     ) {
-        guard !isConverting else { return }
+        guard !isConverting else {
+            // Re-queue if somehow overlapping.
+            replaceQueue.insert(
+                ReplaceJob(
+                    original: original,
+                    converted: converted,
+                    deleteCount: deleteCount,
+                    suffix: suffix,
+                    automatic: automatic,
+                    switchLayout: switchLayout
+                ),
+                at: 0
+            )
+            return
+        }
         isConverting = true
         defer { isConverting = false }
 
@@ -409,63 +472,147 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         EventSynth.replaceCharacters(deleteCount: deleteCount, with: converted + suffix)
         buffer.clear()
         pendingFinishedWord = nil
+        AppLog.line("replaced «\(original)» -> «\(converted)» auto=\(automatic)")
         onStatusChange?(automatic ? "auto:\(converted)" : "manual:\(converted)")
     }
 
-    private func convertSelectionIfAny() {
+    /// Returns true if a non-empty selection was found and handled.
+    @discardableResult
+    private func convertSelectionIfAny() -> Bool {
+        switch SelectedText.probe() {
+        case .empty:
+            return false
+        case let .text(ax):
+            return applySelectionConversion(ax, viaAX: true)
+        case .unknown:
+            // Fallback for apps without AX selected-text (Chrome, some Electron).
+            return convertSelectionViaClipboard()
+        }
+    }
+
+    private func convertSelectionViaClipboard() -> Bool {
         let pasteboard = NSPasteboard.general
         let previous = pasteboard.string(forType: .string)
+        pasteboard.clearContents()
+        let changeAfterClear = pasteboard.changeCount
 
         EventSynth.isSynthesizing = true
-        EventSynth.postKey(keyCode: 8, keyDown: true, flags: .maskCommand)
+        EventSynth.postKey(keyCode: 8, keyDown: true, flags: .maskCommand) // ⌘C
         EventSynth.postKey(keyCode: 8, keyDown: false, flags: .maskCommand)
-        usleep(50_000)
+        usleep(90_000)
         EventSynth.isSynthesizing = false
 
-        guard let selected = pasteboard.string(forType: .string), !selected.isEmpty else {
-            if let previous {
-                pasteboard.clearContents()
-                pasteboard.setString(previous, forType: .string)
-            }
-            return
+        guard pasteboard.changeCount != changeAfterClear,
+              let selected = pasteboard.string(forType: .string),
+              !selected.isEmpty
+        else {
+            restorePasteboard(previous)
+            return false
         }
 
-        let converted = ConversionEngine.convert(selected, direction: .auto)
-        guard converted != selected else {
-            if let previous {
-                pasteboard.clearContents()
-                pasteboard.setString(previous, forType: .string)
-            }
-            return
+        let ok = applySelectionConversion(selected, viaAX: false, previousClipboard: previous)
+        if !ok {
+            restorePasteboard(previous)
         }
+        return ok
+    }
+
+    private func applySelectionConversion(
+        _ selected: String,
+        viaAX: Bool,
+        previousClipboard: String? = nil
+    ) -> Bool {
+        guard selected.count <= 8_000 else {
+            AppLog.line("option selection too large (\(selected.count))")
+            return true
+        }
+
+        let converted = ConversionEngine.flipLayout(selected)
+        guard converted != selected else {
+            AppLog.line("option selection noop «\(preview(selected))»")
+            soundPlayer.play(.undo)
+            return true
+        }
+
+        isConverting = true
+        defer { isConverting = false }
 
         let toRussian = ConversionEngine.dominantScript(selected) == .latin
+            || ConversionEngine.dominantScript(converted) == .cyrillic
         if toRussian {
             _ = inputSources.switchToRussian(preferredID: settings.russianLayoutID)
         } else {
             _ = inputSources.switchToEnglish(preferredID: settings.englishLayoutID)
         }
 
-        pasteboard.clearContents()
-        pasteboard.setString(converted, forType: .string)
-        EventSynth.isSynthesizing = true
-        EventSynth.postKey(keyCode: 9, keyDown: true, flags: .maskCommand)
-        EventSynth.postKey(keyCode: 9, keyDown: false, flags: .maskCommand)
-        EventSynth.isSynthesizing = false
-        soundPlayer.play(.selectionConvert)
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            if let previous {
+        var replaced = false
+        if viaAX {
+            replaced = SelectedText.replaceAX(converted)
+        }
+        if !replaced {
+            let pasteboard = NSPasteboard.general
+            if previousClipboard == nil {
+                // AX path fell back to paste — preserve clipboard.
+                let previous = pasteboard.string(forType: .string)
                 pasteboard.clearContents()
-                pasteboard.setString(previous, forType: .string)
+                pasteboard.setString(converted, forType: .string)
+                EventSynth.isSynthesizing = true
+                EventSynth.postKey(keyCode: 9, keyDown: true, flags: .maskCommand)
+                EventSynth.postKey(keyCode: 9, keyDown: false, flags: .maskCommand)
+                usleep(40_000)
+                EventSynth.isSynthesizing = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [previous] in
+                    self.restorePasteboard(previous)
+                }
+            } else {
+                pasteboard.clearContents()
+                pasteboard.setString(converted, forType: .string)
+                usleep(15_000)
+                EventSynth.isSynthesizing = true
+                EventSynth.postKey(keyCode: 9, keyDown: true, flags: .maskCommand)
+                EventSynth.postKey(keyCode: 9, keyDown: false, flags: .maskCommand)
+                usleep(40_000)
+                EventSynth.isSynthesizing = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [previousClipboard] in
+                    self.restorePasteboard(previousClipboard)
+                }
             }
         }
+
+        undo.remember(ConversionSnapshot(
+            original: selected,
+            converted: converted,
+            switchedToRussian: toRussian,
+            hadTrailingSpace: false,
+            wasAutomatic: false,
+            showingConverted: true
+        ))
+        buffer.clear()
+        pendingFinishedWord = nil
+        soundPlayer.play(.selectionConvert)
+        AppLog.line(
+            "option selection(\(viaAX ? "ax" : "clip")) «\(preview(selected))» -> «\(preview(converted))»"
+        )
+        onStatusChange?("selection:\(preview(converted))")
+        return true
+    }
+
+    private func restorePasteboard(_ previous: String?) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        if let previous {
+            pasteboard.setString(previous, forType: .string)
+        }
+    }
+
+    private func preview(_ text: String, limit: Int = 40) -> String {
+        if text.count <= limit { return text }
+        return String(text.prefix(limit)) + "…"
     }
 
     func undoLastConversion() {
         guard let last = undo.last, last.showingConverted, !isConverting else { return }
-        revertAutomaticConversion(last)
-        // Menu undo also learns "don't auto this original again".
+        applySnapshot(last, showConverted: false)
         undo.learnNever(last.original)
         checker = LayoutChecker(
             validator: SystemWordValidator(),
@@ -531,7 +678,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         }
         lastFrontBundle = bundle
         buffer.clear()
-        conversionGeneration += 1
+        undo.clearLast()
+        pendingFinishedWord = nil
 
         if let saved = appLayouts[bundle], !saved.isEmpty {
             _ = inputSources.select(sourceID: saved)
