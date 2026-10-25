@@ -14,6 +14,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     private var skipNextWord = false
     private var appLayouts: [String: String] = [:]
     private var lastFrontBundle: String?
+    /// Cached so Space does not query NSWorkspace on every key.
+    private var cachedFrontBundleID: String?
     private var isConverting = false
     private var lastBufferedWord = ""
     /// Word completed by Space; used only if there is no toggleable snapshot yet.
@@ -278,7 +280,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             return false
         }
         guard keystrokes >= 2, word.count >= 2 else {
-            AppLog.line("word too short «\(word)»")
+            // Silent — logging every short/empty Space was still work on the tap path.
             return false
         }
         // Reliable replace only on Space.
@@ -287,7 +289,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         if settings.isAutocorrectionActive {
             let check = checker.check(word)
             lastCheckResult = "\(check) for «\(word)»"
-            // No AppLog here — disk I/O on the event-tap thread lags Space.
+            // No AppLog here — keeps Space snappy when no convert.
             if check == .incorrect {
                 let converted = ConversionEngine.convert(word, direction: .auto)
                 if converted != word {
@@ -307,28 +309,30 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             }
         }
 
-        // Spell runs AFTER Space is delivered — NSSpellChecker must not block the key.
+        // Spell AFTER Space, off the main run-loop — otherwise NSSpellChecker stalls the next keys.
         if settings.isSpellAutocorrectActive {
             let spellWord = word.filter { $0.isLetter || $0 == "-" || $0 == "'" }
             let strokes = keystrokes
-            DispatchQueue.main.async { [weak self] in
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 guard let self else { return }
                 guard let fixed = self.spellFixer.suggestion(for: spellWord), fixed != spellWord else {
                     return
                 }
-                AppLog.line("spell «\(spellWord)» -> «\(fixed)» after-space")
-                self.pendingFinishedWord = nil
-                self.enqueueReplacement(
-                    original: word,
-                    converted: fixed,
-                    deleteCount: strokes + 1,
-                    suffix: " ",
-                    automatic: true,
-                    switchLayout: false,
-                    immediate: true,
-                    useWordDelete: true,
-                    trailingSpaceInField: true
-                )
+                DispatchQueue.main.async {
+                    AppLog.line("spell «\(spellWord)» -> «\(fixed)» after-space")
+                    self.pendingFinishedWord = nil
+                    self.enqueueReplacement(
+                        original: word,
+                        converted: fixed,
+                        deleteCount: strokes + 1,
+                        suffix: " ",
+                        automatic: true,
+                        switchLayout: false,
+                        immediate: true,
+                        useWordDelete: true,
+                        trailingSpaceInField: true
+                    )
+                }
             }
         }
         return false
@@ -749,11 +753,14 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     }
 
     private func isExcludedFrontApp() -> Bool {
-        guard let bundle = FrontmostApp.bundleID else { return false }
+        let bundle = cachedFrontBundleID ?? FrontmostApp.bundleID
+        cachedFrontBundleID = bundle
+        guard let bundle else { return false }
         return settings.excludedApps.contains(bundle)
     }
 
     private func observeAppActivation() {
+        cachedFrontBundleID = FrontmostApp.bundleID
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
@@ -765,21 +772,36 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     }
 
     private func handleAppActivation(_ note: Notification) {
-        guard settings.rememberLayoutPerApp else { return }
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
               let bundle = app.bundleIdentifier
         else { return }
+
+        cachedFrontBundleID = bundle
+        buffer.clear()
+        undo.clearLast()
+        pendingFinishedWord = nil
+
+        guard settings.rememberLayoutPerApp else { return }
 
         if let previous = lastFrontBundle {
             appLayouts[previous] = inputSources.currentSourceID
         }
         lastFrontBundle = bundle
-        buffer.clear()
-        undo.clearLast()
-        pendingFinishedWord = nil
 
         if let saved = appLayouts[bundle], !saved.isEmpty {
             _ = inputSources.select(sourceID: saved)
+        }
+    }
+
+    /// Gunzip + build ~2M-word Sets off the typing path (first Space used to hitch).
+    func warmDictionaries() {
+        DispatchQueue.global(qos: .utility).async {
+            _ = BundledDictionary.russianCount
+            _ = BundledDictionary.englishCount
+            _ = BundledDictionary.spellAcceptRussianCount
+            AppLog.line(
+                "dicts warm RU=\(BundledDictionary.russianCount) EN=\(BundledDictionary.englishCount)"
+            )
         }
     }
 }

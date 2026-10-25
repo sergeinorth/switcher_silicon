@@ -26,6 +26,7 @@ public struct LayoutChecker: Sendable {
     }
 
     public func check(_ typed: String) -> LayoutCheckResult {
+        // Keep punctuation that is a letter on the other layout (, . ; ' [ ] `).
         let word = typed
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .filter { ch in
@@ -50,11 +51,9 @@ public struct LayoutChecker: Sendable {
         let convertedLower = converted.lowercased()
         if convertedLower == lower { return .unknown }
 
-        let typedKnown = validator.isKnownWord(lower)
-        let convertedKnown = validator.isKnownWord(convertedLower)
-
-        if typedKnown { return .unknown }
-        if convertedKnown { return .incorrect }
+        // Known typed form wins — skip second dict probe when possible.
+        if validator.isKnownWord(lower) { return .unknown }
+        if validator.isKnownWord(convertedLower) { return .incorrect }
 
         return .unknown
     }

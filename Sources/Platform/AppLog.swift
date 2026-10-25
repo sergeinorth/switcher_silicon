@@ -9,11 +9,17 @@ public enum AppLog {
     }()
 
     private static let queue = DispatchQueue(label: "com.sergei.SwitcherSilicon.log", qos: .utility)
+    // Isolated to `queue` — never touch from the event-tap thread.
+    nonisolated(unsafe) private static let stampFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
 
     public static func line(_ message: String) {
-        let stamp = ISO8601DateFormatter().string(from: Date())
-        let row = "[\(stamp)] \(message)\n"
+        let now = Date()
         queue.async {
+            let row = "[\(stampFormatter.string(from: now))] \(message)\n"
             guard let data = row.data(using: .utf8) else { return }
             if FileManager.default.fileExists(atPath: path.path) {
                 if let handle = try? FileHandle(forWritingTo: path) {

@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let settings = SettingsStore.load()
         orchestrator = LayoutOrchestrator(settings: settings)
         statusBar = StatusBarController(orchestrator: orchestrator)
+        orchestrator.warmDictionaries()
 
         // Always attempt tap — success is the real signal, not AXIsProcessTrusted.
         tryStartTap(reason: "launch")
