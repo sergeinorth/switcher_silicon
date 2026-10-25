@@ -19,36 +19,32 @@ public enum EventSynth {
         for _ in 0..<times {
             postKey(keyCode: 51, keyDown: true)
             postKey(keyCode: 51, keyDown: false)
-            usleep(3_000)
+            usleep(1_000)
         }
     }
 
     public static func typeText(_ text: String) {
         guard !text.isEmpty else { return }
-        for ch in text {
-            let piece = String(ch)
-            var utf16 = Array(piece.utf16)
-            utf16.withUnsafeMutableBufferPointer { buffer in
-                guard let base = buffer.baseAddress else { return }
-                guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else { return }
-                markAsOurs(down)
-                down.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: base)
-                // HID tap reaches the focused app more reliably than session tap for synth.
-                down.post(tap: .cghidEventTap)
-            }
-            usleep(4_000)
+        // Batch whole string in one unicode event — much faster, less tap starvation.
+        var utf16 = Array(text.utf16)
+        utf16.withUnsafeMutableBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return }
+            guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else { return }
+            markAsOurs(down)
+            down.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: base)
+            down.post(tap: .cghidEventTap)
         }
     }
 
     public static func replaceCharacters(deleteCount: Int, with newText: String) {
         isSynthesizing = true
         defer {
-            usleep(8_000)
+            usleep(3_000)
             isSynthesizing = false
         }
         AppLog.line("replace delete=\(deleteCount) text=\(newText)")
         deleteBackward(times: deleteCount)
-        usleep(15_000)
+        usleep(5_000)
         typeText(newText)
     }
 
