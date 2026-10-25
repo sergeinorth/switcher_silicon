@@ -11,7 +11,7 @@
 
 ## Скачать
 
-**[v0.1.2 — SwitcherSilicon-0.1.2-macos-arm64.zip](https://github.com/sergeinorth/switcher_silicon/releases/latest)**
+**[v0.1.3 — SwitcherSilicon-0.1.3-macos-arm64.zip](https://github.com/sergeinorth/switcher_silicon/releases/latest)**
 
 Распаковать, перенести `SwitcherSilicon.app` в `/Applications`, выдать Универсальный доступ и Мониторинг ввода. Если Gatekeeper ругается — см. notes релиза.
 
