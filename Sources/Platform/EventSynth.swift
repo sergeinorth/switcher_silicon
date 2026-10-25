@@ -19,13 +19,20 @@ public enum EventSynth {
         for _ in 0..<times {
             postKey(keyCode: 51, keyDown: true)
             postKey(keyCode: 51, keyDown: false)
-            usleep(200)
+            // TextEdit / Chrome drop backspaces if they arrive faster than ~1ms.
+            usleep(2_500)
         }
+    }
+
+    /// Deletes the previous word in one shot (Option+Delete). More reliable than N backspaces.
+    public static func deleteBackwardWord() {
+        postKey(keyCode: 51, keyDown: true, flags: .maskAlternate)
+        postKey(keyCode: 51, keyDown: false, flags: .maskAlternate)
+        usleep(4_000)
     }
 
     public static func typeText(_ text: String) {
         guard !text.isEmpty else { return }
-        // Batch whole string in one unicode event — much faster, less tap starvation.
         var utf16 = Array(text.utf16)
         utf16.withUnsafeMutableBufferPointer { buffer in
             guard let base = buffer.baseAddress else { return }
@@ -33,18 +40,36 @@ public enum EventSynth {
             markAsOurs(down)
             down.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: base)
             down.post(tap: .cghidEventTap)
+            if let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) {
+                markAsOurs(up)
+                up.post(tap: .cghidEventTap)
+            }
         }
     }
 
-    public static func replaceCharacters(deleteCount: Int, with newText: String) {
+    /// - Parameter useWordDelete: when true (Space swallowed, cursor still on the word),
+    ///   use Option+Delete once instead of N backspaces — avoids leftover first letters.
+    public static func replaceCharacters(
+        deleteCount: Int,
+        with newText: String,
+        useWordDelete: Bool = false
+    ) {
         isSynthesizing = true
         defer {
-            usleep(1_500)
+            usleep(2_000)
             isSynthesizing = false
         }
-        AppLog.line("replace delete=\(deleteCount) text=\(newText)")
-        deleteBackward(times: deleteCount)
-        usleep(1_000)
+        AppLog.line(
+            "replace delete=\(deleteCount) text=\(newText) wordDel=\(useWordDelete)"
+        )
+        // Let the last typed key commit into the target field before we erase.
+        usleep(12_000)
+        if useWordDelete, deleteCount > 0 {
+            deleteBackwardWord()
+        } else {
+            deleteBackward(times: deleteCount)
+        }
+        usleep(3_000)
         typeText(newText)
     }
 

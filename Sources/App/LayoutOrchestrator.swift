@@ -32,6 +32,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         var switchLayout: Bool
         /// Space was swallowed — replace ASAP (no wait for key commit).
         var immediate: Bool
+        /// Cursor still on the word (no trailing space in field) — Option+Delete once.
+        var useWordDelete: Bool
     }
 
     var onStatusChange: ((String) -> Void)?
@@ -256,7 +258,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                         suffix: " ",
                         automatic: true,
                         switchLayout: true,
-                        immediate: true
+                        immediate: true,
+                        useWordDelete: true
                     )
                     return true
                 }
@@ -275,7 +278,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                     suffix: " ",
                     automatic: true,
                     switchLayout: false,
-                    immediate: true
+                    immediate: true,
+                    useWordDelete: true
                 )
                 return true
             }
@@ -290,7 +294,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         suffix: String,
         automatic: Bool,
         switchLayout: Bool,
-        immediate: Bool = false
+        immediate: Bool = false,
+        useWordDelete: Bool = false
     ) {
         replaceQueue.append(
             ReplaceJob(
@@ -300,7 +305,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                 suffix: suffix,
                 automatic: automatic,
                 switchLayout: switchLayout,
-                immediate: immediate
+                immediate: immediate,
+                useWordDelete: useWordDelete
             )
         )
         pumpReplaceQueue()
@@ -318,7 +324,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                 deleteCount: job.deleteCount,
                 suffix: job.suffix,
                 automatic: job.automatic,
-                switchLayout: job.switchLayout
+                switchLayout: job.switchLayout,
+                useWordDelete: job.useWordDelete
             )
             self.pumpReplaceQueue()
         }
@@ -447,7 +454,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         deleteCount: Int,
         suffix: String,
         automatic: Bool,
-        switchLayout: Bool
+        switchLayout: Bool,
+        useWordDelete: Bool = false
     ) {
         guard !isConverting else {
             replaceQueue.insert(
@@ -458,7 +466,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                     suffix: suffix,
                     automatic: automatic,
                     switchLayout: switchLayout,
-                    immediate: true
+                    immediate: true,
+                    useWordDelete: useWordDelete
                 ),
                 at: 0
             )
@@ -493,7 +502,11 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             soundPlayer.play(.autoConvert)
         }
 
-        EventSynth.replaceCharacters(deleteCount: deleteCount, with: converted + suffix)
+        EventSynth.replaceCharacters(
+            deleteCount: deleteCount,
+            with: converted + suffix,
+            useWordDelete: useWordDelete
+        )
         buffer.clear()
         pendingFinishedWord = nil
         AppLog.line("replaced «\(original)» -> «\(converted)» auto=\(automatic) del=\(deleteCount)")
