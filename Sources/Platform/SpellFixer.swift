@@ -10,12 +10,21 @@ import Engine
 public struct SpellFixer: @unchecked Sendable {
     /// Bundled dict only on the hot path — NSSpellChecker is reserved for guesses below.
     private let seed = SeedWordValidator()
+    private var ignoredWords: Set<String>
 
-    public init() {}
+    public init(ignoredWords: Set<String> = []) {
+        self.ignoredWords = ignoredWords
+    }
+
+    public mutating func setIgnoredWords(_ words: Set<String>) {
+        ignoredWords = Set(words.map { $0.lowercased() })
+    }
 
     public func suggestion(for word: String) -> String? {
         let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 4 else { return nil }
+        let lower = trimmed.lowercased()
+        if ignoredWords.contains(lower) { return nil }
         // Already real in our dicts — never "fix" (skip slow system checker here).
         if seed.isKnownWord(trimmed) || BundledDictionary.isSpellAcceptable(trimmed) {
             return nil

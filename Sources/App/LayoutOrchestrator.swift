@@ -8,7 +8,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     private var soundPlayer: SoundPlayer
     private var settings: AppSettings
     private var checker: LayoutChecker
-    private let spellFixer = SpellFixer()
+    private var spellFixer: SpellFixer
     private var buffer = KeyStrokeBuffer()
     private var undo = UndoState()
     private var skipNextWord = false
@@ -20,6 +20,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     private var lastBufferedWord = ""
     /// Word completed by Space; used only if there is no toggleable snapshot yet.
     private var pendingFinishedWord: String?
+    private var pendingFinishedAt: CFAbsoluteTime = 0
     private var lastCheckResult = "—"
     private var keyEventCount = 0
     private var lastOptionAt: CFAbsoluteTime = 0
@@ -46,10 +47,11 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     init(settings: AppSettings) {
         self.settings = settings
         self.soundPlayer = SoundPlayer(settings: settings)
+        self.spellFixer = SpellFixer(ignoredWords: settings.ignoredWordSet)
         // Bundled dictionary only — NSSpellChecker is too slow on the Space hot path.
         self.checker = LayoutChecker(
             validator: SeedWordValidator(),
-            neverConvert: [],
+            neverConvert: settings.ignoredWordSet,
             userRules: settings.userRules
         )
         eventTap.delegate = self
@@ -92,6 +94,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         Pending finished: «\(pendingFinishedWord ?? "")»
         Last check: \(lastCheckResult)
         Excluded: \(settings.excludedApps.joined(separator: ", "))
+        Ignored words: \(settings.ignoredWords.sorted().joined(separator: ", "))
         Log: ~/Library/Logs/SwitcherSilicon.log
 
         \(hint)
@@ -101,12 +104,34 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     func reloadSettings(_ settings: AppSettings) {
         self.settings = settings
         soundPlayer.settings = settings
+        rebuildDetectors()
+        SettingsStore.save(settings)
+    }
+
+    private func rebuildDetectors() {
+        let never = settings.ignoredWordSet.union(undo.learnedNever)
+        spellFixer = SpellFixer(ignoredWords: never)
         checker = LayoutChecker(
             validator: SeedWordValidator(),
-            neverConvert: undo.learnedNever,
+            neverConvert: never,
             userRules: settings.userRules
         )
+    }
+
+    /// Persist a word so layout/spell leave it alone. Triggered by undoing an auto-fix (Option / ⌘⌥Z).
+    func rememberIgnoredWord(_ word: String) {
+        let cleaned = word
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .filter { $0.isLetter || $0 == "-" || $0 == "'" }
+        guard cleaned.count >= 2 else { return }
+        guard !settings.ignoredWordSet.contains(cleaned) else { return }
+        settings.ignoredWords.append(cleaned)
+        undo.learnNever(cleaned)
+        rebuildDetectors()
         SettingsStore.save(settings)
+        AppLog.line("ignore word «\(cleaned)»")
+        onStatusChange?("ignore:\(cleaned)")
     }
 
     var currentSettings: AppSettings { settings }
@@ -175,6 +200,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         if let glyph = resolvedGlyph(characters: characters, keyCode: keyCode, shift: shift) {
             // New typing: don't Option-revert an old auto word into the new text.
             pendingFinishedWord = nil
+            pendingFinishedAt = 0
             undo.clearLast()
             buffer.append(KeyStroke(characters: glyph, keyCode: keyCode))
             lastBufferedWord = buffer.stringValue
@@ -271,6 +297,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         buffer.clear()
         lastBufferedWord = ""
         pendingFinishedWord = nil
+        pendingFinishedAt = 0
         undo.clearLast()
     }
 
@@ -285,6 +312,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         lastBufferedWord = word
         undo.clearLast()
         pendingFinishedWord = word
+        pendingFinishedAt = CFAbsoluteTimeGetCurrent()
 
         if skipNextWord {
             skipNextWord = false
@@ -311,6 +339,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                 let converted = ConversionEngine.convert(word, direction: .auto)
                 if converted != word {
                     pendingFinishedWord = nil
+                    pendingFinishedAt = 0
                     enqueueReplacement(
                         original: word,
                         converted: converted,
@@ -326,18 +355,31 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             }
         }
 
-        // Spell AFTER Space, off the main run-loop — otherwise NSSpellChecker stalls the next keys.
+        // Spell AFTER Space, off the main run-loop — NSSpellChecker must not block the key.
         if settings.isSpellAutocorrectActive {
             let spellWord = word.filter { $0.isLetter || $0 == "-" || $0 == "'" }
             let strokes = keystrokes
+            let expected = word
+            let startedAt = pendingFinishedAt
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 guard let self else { return }
                 guard let fixed = self.spellFixer.suggestion(for: spellWord), fixed != spellWord else {
                     return
                 }
                 DispatchQueue.main.async {
+                    // User kept typing / clicked away — word-delete would leave the typo and append the fix.
+                    guard self.pendingFinishedWord == expected, self.buffer.isEmpty else {
+                        AppLog.line("spell skip «\(spellWord)»: context moved")
+                        return
+                    }
+                    guard CFAbsoluteTimeGetCurrent() - startedAt < 1.25 else {
+                        AppLog.line("spell skip «\(spellWord)»: too late")
+                        return
+                    }
                     AppLog.line("spell «\(spellWord)» -> «\(fixed)» after-space")
                     self.pendingFinishedWord = nil
+                    self.pendingFinishedAt = 0
+                    // Exact backspaces (not Option+Delete) — async lag made word-delete miss the typo.
                     self.enqueueReplacement(
                         original: word,
                         converted: fixed,
@@ -346,8 +388,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                         automatic: true,
                         switchLayout: false,
                         immediate: true,
-                        useWordDelete: true,
-                        trailingSpaceInField: true
+                        useWordDelete: false,
+                        trailingSpaceInField: false
                     )
                 }
             }
@@ -449,6 +491,10 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                 AppLog.line("option toggle → converted «\(last.original)» -> «\(last.converted)»")
                 applySnapshot(last, showConverted: true)
             }
+            // Undoing an automatic fix = "don't touch this word again".
+            if last.showingConverted, last.wasAutomatic {
+                rememberIgnoredWord(last.original)
+            }
             return
         }
         if undo.last != nil {
@@ -526,12 +572,14 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         }
 
         usleep(15_000)
-        EventSynth.replaceCharacters(deleteCount: deleteCount, with: text)
+        // Snapshot toggle uses counted deletes — word length is known exactly.
+        EventSynth.replaceCharacters(deleteCount: deleteCount, with: text, useWordDelete: false)
 
         var updated = last
         updated.showingConverted = showConverted
         undo.remember(updated)
         pendingFinishedWord = nil
+        pendingFinishedAt = 0
         buffer.clear()
         onStatusChange?(showConverted ? "toggle:\(last.converted)" : "revert:\(last.original)")
     }
@@ -736,12 +784,9 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     func undoLastConversion() {
         guard let last = undo.last, last.showingConverted, !isConverting else { return }
         applySnapshot(last, showConverted: false)
-        undo.learnNever(last.original)
-        checker = LayoutChecker(
-            validator: SeedWordValidator(),
-            neverConvert: undo.learnedNever,
-            userRules: settings.userRules
-        )
+        if last.wasAutomatic {
+            rememberIgnoredWord(last.original)
+        }
     }
 
     func toggleSpellAutocorrect() {

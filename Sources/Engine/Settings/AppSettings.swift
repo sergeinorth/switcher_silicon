@@ -114,6 +114,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var rememberLayoutPerApp: Bool
     public var excludedApps: [String]
     public var userRules: [UserRule]
+    /// Words that must not be layout-converted or spell-fixed (lowercased).
+    public var ignoredWords: [String]
     public var launchesOnStartup: Bool
     /// Menu / alerts language (not keyboard layout).
     public var uiLanguage: UILanguage
@@ -134,6 +136,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         rememberLayoutPerApp: true,
         excludedApps: [],
         userRules: [],
+        ignoredWords: [],
         launchesOnStartup: false,
         uiLanguage: .systemDefault
     )
@@ -154,6 +157,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         rememberLayoutPerApp: Bool,
         excludedApps: [String],
         userRules: [UserRule],
+        ignoredWords: [String],
         launchesOnStartup: Bool,
         uiLanguage: UILanguage
     ) {
@@ -172,6 +176,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.rememberLayoutPerApp = rememberLayoutPerApp
         self.excludedApps = excludedApps
         self.userRules = userRules
+        self.ignoredWords = ignoredWords
         self.launchesOnStartup = launchesOnStartup
         self.uiLanguage = uiLanguage
     }
@@ -194,8 +199,13 @@ public struct AppSettings: Codable, Equatable, Sendable {
         rememberLayoutPerApp = try c.decodeIfPresent(Bool.self, forKey: .rememberLayoutPerApp) ?? d.rememberLayoutPerApp
         excludedApps = try c.decodeIfPresent([String].self, forKey: .excludedApps) ?? d.excludedApps
         userRules = try c.decodeIfPresent([UserRule].self, forKey: .userRules) ?? d.userRules
+        ignoredWords = try c.decodeIfPresent([String].self, forKey: .ignoredWords) ?? d.ignoredWords
         launchesOnStartup = try c.decodeIfPresent(Bool.self, forKey: .launchesOnStartup) ?? d.launchesOnStartup
         uiLanguage = try c.decodeIfPresent(UILanguage.self, forKey: .uiLanguage) ?? d.uiLanguage
+    }
+
+    public var ignoredWordSet: Set<String> {
+        Set(ignoredWords.map { $0.lowercased() })
     }
 }
 

@@ -63,7 +63,7 @@ enum L10n {
             case .soundPicker: return "Выбор звуков"
             case .launchOn: return "Запуск при входе: вкл"
             case .launchOff: return "Запуск при входе: выкл"
-            case .undoLast: return "Отменить последнюю конвертацию"
+            case .undoLast: return "Отменить (запомнить слово)"
             case .diagnostics: return "Диагностика…"
             case .openInputMonitoring: return "Открыть Мониторинг ввода…"
             case .openAccessibility: return "Открыть Универсальный доступ…"
@@ -91,6 +91,7 @@ enum L10n {
             case .diagHint: return """
                 Нужны: Мониторинг ввода + Универсальный доступ для /Applications/SwitcherSilicon.app
                 RuSwitcher держи выключенным.
+                Лишнее автоисправление: Option (или ⌘⌥Z) — слово больше не трогаем.
                 """
             }
         }
@@ -113,7 +114,7 @@ enum L10n {
             case .soundPicker: return "Sound picker"
             case .launchOn: return "Launch at login: on"
             case .launchOff: return "Launch at login: off"
-            case .undoLast: return "Undo last conversion"
+            case .undoLast: return "Undo (remember word)"
             case .diagnostics: return "Diagnostics…"
             case .openInputMonitoring: return "Open Input Monitoring…"
             case .openAccessibility: return "Open Accessibility…"
@@ -141,6 +142,7 @@ enum L10n {
             case .diagHint: return """
                 Required: Input Monitoring + Accessibility for /Applications/SwitcherSilicon.app
                 Keep RuSwitcher disabled.
+                Wrong auto-fix: Option (or ⌘⌥Z) — we remember the word and leave it alone.
                 """
             }
         }

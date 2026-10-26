@@ -215,11 +215,12 @@ final class StatusBarController {
     }
 
     private func reflectStatus(_ status: String) {
-        if status.hasPrefix("auto:") || status.hasPrefix("manual:") {
+        if status.hasPrefix("auto:") || status.hasPrefix("manual:") || status.hasPrefix("ignore:") {
             flashToken += 1
             let token = flashToken
-            lastTitle = "✓"
-            item.button?.title = "✓"
+            let mark = status.hasPrefix("ignore:") ? "·" : "✓"
+            lastTitle = mark
+            item.button?.title = mark
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 guard let self, self.flashToken == token else { return }
                 self.lastTitle = ""
