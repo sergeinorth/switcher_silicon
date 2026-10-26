@@ -11,20 +11,26 @@ public struct SpellFixer: @unchecked Sendable {
     /// Bundled dict only on the hot path — NSSpellChecker is reserved for guesses below.
     private let seed = SeedWordValidator()
     private var ignoredWords: Set<String>
+    /// Lowercased typo → preferred spelling (user-taught via Option+Shift).
+    private var replacements: [String: String]
 
-    public init(ignoredWords: Set<String> = []) {
-        self.ignoredWords = ignoredWords
-    }
-
-    public mutating func setIgnoredWords(_ words: Set<String>) {
-        ignoredWords = Set(words.map { $0.lowercased() })
+    public init(ignoredWords: Set<String> = [], replacements: [String: String] = [:]) {
+        self.ignoredWords = Set(ignoredWords.map { $0.lowercased() })
+        self.replacements = Dictionary(
+            uniqueKeysWithValues: replacements.map { ($0.key.lowercased(), $0.value) }
+        )
     }
 
     public func suggestion(for word: String) -> String? {
         let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 4 else { return nil }
+        guard trimmed.count >= 2 else { return nil }
         let lower = trimmed.lowercased()
         if ignoredWords.contains(lower) { return nil }
+        // User dictionary wins over heuristics (and allows short taught typos).
+        if let taught = replacements[lower], taught.lowercased() != lower {
+            return applyCase(of: trimmed, to: taught)
+        }
+        guard trimmed.count >= 4 else { return nil }
         // Already real in our dicts — never "fix" (skip slow system checker here).
         if seed.isKnownWord(trimmed) || BundledDictionary.isSpellAcceptable(trimmed) {
             return nil

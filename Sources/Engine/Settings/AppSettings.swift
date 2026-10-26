@@ -116,6 +116,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var userRules: [UserRule]
     /// Words that must not be layout-converted or spell-fixed (lowercased).
     public var ignoredWords: [String]
+    /// User-taught spell fixes: lowercase typo → preferred spelling.
+    public var spellReplacements: [String: String]
     public var launchesOnStartup: Bool
     /// Menu / alerts language (not keyboard layout).
     public var uiLanguage: UILanguage
@@ -137,6 +139,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         excludedApps: [],
         userRules: [],
         ignoredWords: [],
+        spellReplacements: [:],
         launchesOnStartup: false,
         uiLanguage: .systemDefault
     )
@@ -158,6 +161,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         excludedApps: [String],
         userRules: [UserRule],
         ignoredWords: [String],
+        spellReplacements: [String: String],
         launchesOnStartup: Bool,
         uiLanguage: UILanguage
     ) {
@@ -177,6 +181,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.excludedApps = excludedApps
         self.userRules = userRules
         self.ignoredWords = ignoredWords
+        self.spellReplacements = spellReplacements
         self.launchesOnStartup = launchesOnStartup
         self.uiLanguage = uiLanguage
     }
@@ -200,6 +205,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         excludedApps = try c.decodeIfPresent([String].self, forKey: .excludedApps) ?? d.excludedApps
         userRules = try c.decodeIfPresent([UserRule].self, forKey: .userRules) ?? d.userRules
         ignoredWords = try c.decodeIfPresent([String].self, forKey: .ignoredWords) ?? d.ignoredWords
+        spellReplacements = try c.decodeIfPresent([String: String].self, forKey: .spellReplacements) ?? d.spellReplacements
         launchesOnStartup = try c.decodeIfPresent(Bool.self, forKey: .launchesOnStartup) ?? d.launchesOnStartup
         uiLanguage = try c.decodeIfPresent(UILanguage.self, forKey: .uiLanguage) ?? d.uiLanguage
     }

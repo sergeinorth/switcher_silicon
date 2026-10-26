@@ -21,6 +21,9 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     /// Word completed by Space; used only if there is no toggleable snapshot yet.
     private var pendingFinishedWord: String?
     private var pendingFinishedAt: CFAbsoluteTime = 0
+    /// Typo candidate for Option+Shift teach (set when a word finishes without layout convert).
+    private var teachFromWord: String?
+    private var teachFromAt: CFAbsoluteTime = 0
     private var lastCheckResult = "—"
     private var keyEventCount = 0
     private var lastOptionAt: CFAbsoluteTime = 0
@@ -47,7 +50,10 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     init(settings: AppSettings) {
         self.settings = settings
         self.soundPlayer = SoundPlayer(settings: settings)
-        self.spellFixer = SpellFixer(ignoredWords: settings.ignoredWordSet)
+        self.spellFixer = SpellFixer(
+            ignoredWords: settings.ignoredWordSet,
+            replacements: settings.spellReplacements
+        )
         // Bundled dictionary only — NSSpellChecker is too slow on the Space hot path.
         self.checker = LayoutChecker(
             validator: SeedWordValidator(),
@@ -95,6 +101,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         Last check: \(lastCheckResult)
         Excluded: \(settings.excludedApps.joined(separator: ", "))
         Ignored words: \(settings.ignoredWords.sorted().joined(separator: ", "))
+        Spell fixes: \(settings.spellReplacements.keys.sorted().joined(separator: ", "))
+        Teach from: «\(teachFromWord ?? "")»
         Log: ~/Library/Logs/SwitcherSilicon.log
 
         \(hint)
@@ -110,7 +118,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
 
     private func rebuildDetectors() {
         let never = settings.ignoredWordSet.union(undo.learnedNever)
-        spellFixer = SpellFixer(ignoredWords: never)
+        spellFixer = SpellFixer(ignoredWords: never, replacements: settings.spellReplacements)
         checker = LayoutChecker(
             validator: SeedWordValidator(),
             neverConvert: never,
@@ -245,6 +253,23 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         }
     }
 
+    func eventTapDidDetectOptionShiftTap() {
+        guard settings.useOptionTrigger else { return }
+        if isConverting || EventSynth.isSynthesizing || CFAbsoluteTimeGetCurrent() < EventSynth.ignoreOptionUntil {
+            AppLog.line("option+shift ignored: synth/convert")
+            return
+        }
+        let now = CFAbsoluteTimeGetCurrent()
+        if now - lastOptionAt < 0.20 {
+            AppLog.line("option+shift debounced")
+            return
+        }
+        lastOptionAt = now
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self] in
+            self?.handleTeachReplacement()
+        }
+    }
+
     /// Prefer event unicode; fall back to US keycode map (event unicode is often empty in taps).
     private func resolvedGlyph(characters: String, keyCode: UInt16, shift: Bool) -> String? {
         if characters.count == 1, let ch = characters.first, isBufferableGlyph(ch) {
@@ -298,7 +323,51 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         lastBufferedWord = ""
         pendingFinishedWord = nil
         pendingFinishedAt = 0
+        // Keep teachFromWord — user may click away briefly while fixing a typo.
         undo.clearLast()
+    }
+
+    private func normalizeTeachWord(_ word: String) -> String {
+        word
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .filter { $0.isLetter || $0 == "-" || $0 == "'" }
+    }
+
+    private func noteTeachFrom(_ word: String) {
+        let cleaned = normalizeTeachWord(word)
+        guard cleaned.count >= 2 else { return }
+        let now = CFAbsoluteTimeGetCurrent()
+        // Within the teach window, a *different* finished word is the corrected form — keep typo.
+        if let from = teachFromWord,
+           now - teachFromAt < 45,
+           cleaned.lowercased() != from.lowercased()
+        {
+            return
+        }
+        teachFromWord = cleaned
+        teachFromAt = now
+    }
+
+    private func clearTeachFrom() {
+        teachFromWord = nil
+        teachFromAt = 0
+    }
+
+    private func applySimpleCase(of original: String, to suggestion: String) -> String {
+        if let first = original.first, first.isUppercase {
+            return suggestion.prefix(1).uppercased() + suggestion.dropFirst()
+        }
+        return suggestion
+    }
+
+    private func taughtReplacement(for word: String) -> String? {
+        let cleaned = normalizeTeachWord(word)
+        guard cleaned.count >= 2 else { return nil }
+        let lower = cleaned.lowercased()
+        guard let to = settings.spellReplacements[lower], to.lowercased() != lower else {
+            return nil
+        }
+        return applySimpleCase(of: cleaned, to: to)
     }
 
     // MARK: - Conversion
@@ -340,6 +409,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                 if converted != word {
                     pendingFinishedWord = nil
                     pendingFinishedAt = 0
+                    clearTeachFrom()
                     enqueueReplacement(
                         original: word,
                         converted: converted,
@@ -354,6 +424,26 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                 }
             }
         }
+
+        // User-taught fixes: sync on Space (even if general spell heuristics are off).
+        if let taught = taughtReplacement(for: word) {
+            pendingFinishedWord = nil
+            pendingFinishedAt = 0
+            clearTeachFrom()
+            enqueueReplacement(
+                original: word,
+                converted: taught,
+                deleteCount: keystrokes,
+                suffix: " ",
+                automatic: true,
+                switchLayout: false,
+                immediate: true,
+                useWordDelete: true
+            )
+            return true
+        }
+
+        noteTeachFrom(word)
 
         // Spell AFTER Space, off the main run-loop — NSSpellChecker must not block the key.
         if settings.isSpellAutocorrectActive {
@@ -379,6 +469,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                     AppLog.line("spell «\(spellWord)» -> «\(fixed)» after-space")
                     self.pendingFinishedWord = nil
                     self.pendingFinishedAt = 0
+                    self.clearTeachFrom()
                     // Exact backspaces (not Option+Delete) — async lag made word-delete miss the typo.
                     self.enqueueReplacement(
                         original: word,
@@ -395,6 +486,51 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             }
         }
         return false
+    }
+
+    /// Option+Shift: remember teachFrom → current word (buffer or last finished).
+    private func handleTeachReplacement() {
+        let toRaw: String
+        if !buffer.stringValue.isEmpty {
+            toRaw = buffer.stringValue
+        } else if let pending = pendingFinishedWord, !pending.isEmpty {
+            toRaw = pending
+        } else {
+            AppLog.line("teach: nothing to map to")
+            soundPlayer.play(.undo)
+            return
+        }
+
+        let to = normalizeTeachWord(toRaw)
+        guard to.count >= 2 else {
+            AppLog.line("teach: target too short")
+            soundPlayer.play(.undo)
+            return
+        }
+
+        guard let fromRaw = teachFromWord,
+              CFAbsoluteTimeGetCurrent() - teachFromAt < 45
+        else {
+            AppLog.line("teach: no typo candidate (type typo+Space, fix, then Option+Shift)")
+            soundPlayer.play(.undo)
+            return
+        }
+        let from = normalizeTeachWord(fromRaw)
+        guard from.count >= 2, from.lowercased() != to.lowercased() else {
+            AppLog.line("teach: same word «\(from)»")
+            soundPlayer.play(.undo)
+            return
+        }
+
+        settings.spellReplacements[from.lowercased()] = to
+        // If it was ignored, drop ignore so the taught fix can run.
+        settings.ignoredWords.removeAll { $0.lowercased() == from.lowercased() }
+        rebuildDetectors()
+        SettingsStore.save(settings)
+        clearTeachFrom()
+        AppLog.line("teach «\(from)» -> «\(to)»")
+        soundPlayer.play(.selectionConvert)
+        onStatusChange?("teach:\(from)→\(to)")
     }
 
     private func enqueueReplacement(

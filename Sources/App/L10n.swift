@@ -92,6 +92,7 @@ enum L10n {
                 Нужны: Мониторинг ввода + Универсальный доступ для /Applications/SwitcherSilicon.app
                 RuSwitcher держи выключенным.
                 Лишнее автоисправление: Option (или ⌘⌥Z) — слово больше не трогаем.
+                Своя замена: опечатка → поправь → Option+Shift.
                 """
             }
         }
@@ -143,6 +144,7 @@ enum L10n {
                 Required: Input Monitoring + Accessibility for /Applications/SwitcherSilicon.app
                 Keep RuSwitcher disabled.
                 Wrong auto-fix: Option (or ⌘⌥Z) — we remember the word and leave it alone.
+                Custom fix: typo → correct it → Option+Shift.
                 """
             }
         }
