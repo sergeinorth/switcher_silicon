@@ -1,13 +1,15 @@
 import AppKit
 import Carbon
+import Engine
 
 public protocol EventTapDelegate: AnyObject {
     func eventTap(didReceiveKeyDown keyCode: UInt16, characters: String, flags: CGEventFlags, event: CGEvent) -> Unmanaged<CGEvent>?
     func eventTap(didReceiveKeyUp keyCode: UInt16, flags: CGEventFlags, event: CGEvent) -> Unmanaged<CGEvent>?
     func eventTapDidReceiveFlagsChanged(event: CGEvent) -> Unmanaged<CGEvent>?
     func eventTapDidDetectOptionTap()
-    /// Option+Shift quick tap — teach spell replacement (typo → fix).
+    /// Option(+Shift) teach chord — or undo last teach when idle.
     func eventTapDidDetectOptionShiftTap()
+    func eventTapDidDetectPauseChord()
 }
 
 public final class EventTap {
@@ -17,12 +19,25 @@ public final class EventTap {
     private var runLoopSource: CFRunLoopSource?
     private var optionDownAt: CFAbsoluteTime?
     private var optionAlone = false
-    /// Shift held with Option (teach chord).
     private var optionWithShift = false
+    private var optionKeyCode: UInt16 = 58
+    private var leftShiftDown = false
+    private var rightShiftDown = false
+    private var bothShiftsFired = false
+
+    public var convertChord: ModifierChord = .eitherOption
+    public var teachChord: ModifierChord = .optionShift
+    public var pauseChord: ModifierChord = .bothShifts
 
     public init() {}
 
     public var isEnabled: Bool { port != nil }
+
+    public func applyHotkeys(_ prefs: HotkeyPrefs) {
+        convertChord = prefs.convert
+        teachChord = prefs.teach
+        pauseChord = prefs.pause
+    }
 
     @discardableResult
     public func start() -> Bool {
@@ -79,8 +94,6 @@ public final class EventTap {
             return Unmanaged.passUnretained(event)
         }
 
-        // Synthetic Option+Delete (word erase) must not look like a user Option tap —
-        // otherwise we auto-convert then immediately toggle/revert ("works every other time").
         if EventSynth.isOurs(event) || EventSynth.isSynthesizing {
             cancelOptionAlone()
             return Unmanaged.passUnretained(event)
@@ -93,7 +106,6 @@ public final class EventTap {
         switch type {
         case .keyDown:
             let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-            // Real keys cancel Option-alone; Shift is part of the teach chord.
             if optionDownAt != nil, !isOptionKeyCode(keyCode), !isShiftKeyCode(keyCode) {
                 optionAlone = false
             }
@@ -112,7 +124,7 @@ public final class EventTap {
             return delegate?.eventTap(didReceiveKeyUp: keyCode, flags: event.flags, event: event)
                 ?? Unmanaged.passUnretained(event)
         case .flagsChanged:
-            trackOptionTap(event)
+            trackModifiers(event)
             return delegate?.eventTapDidReceiveFlagsChanged(event: event)
                 ?? Unmanaged.passUnretained(event)
         default:
@@ -138,7 +150,7 @@ public final class EventTap {
         optionWithShift = false
     }
 
-    private func trackOptionTap(_ event: CGEvent) {
+    private func trackModifiers(_ event: CGEvent) {
         if EventSynth.isSynthesizing || CFAbsoluteTimeGetCurrent() < EventSynth.ignoreOptionUntil {
             cancelOptionAlone()
             return
@@ -146,47 +158,75 @@ public final class EventTap {
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let flags = event.flags
 
+        // Both Shifts pause chord.
+        if keyCode == 56 || keyCode == 60 {
+            let shiftDown = flags.contains(.maskShift)
+            if keyCode == 56 { leftShiftDown = shiftDown }
+            if keyCode == 60 { rightShiftDown = shiftDown }
+            if leftShiftDown, rightShiftDown {
+                if !bothShiftsFired, pauseChord == .bothShifts {
+                    bothShiftsFired = true
+                    nonisolated(unsafe) let del = self.delegate
+                    DispatchQueue.main.async {
+                        del?.eventTapDidDetectPauseChord()
+                    }
+                }
+            } else {
+                bothShiftsFired = false
+            }
+        }
+
         if isOptionKeyCode(keyCode) {
             let optionDown = flags.contains(.maskAlternate)
             if optionDown {
                 optionDownAt = CFAbsoluteTimeGetCurrent()
                 optionAlone = true
                 optionWithShift = flags.contains(.maskShift)
+                optionKeyCode = UInt16(keyCode)
             } else {
                 finishOptionIfAlone()
             }
             return
         }
 
-        // Shift while Option is held → teach chord.
         if optionDownAt != nil, flags.contains(.maskAlternate), flags.contains(.maskShift) {
             optionWithShift = true
         }
     }
 
+    private func matches(_ chord: ModifierChord, shift: Bool, keyCode: UInt16) -> Bool {
+        guard chord != .disabled else { return false }
+        guard chord.isOptionBased else { return false }
+        if chord.wantsShift != shift { return false }
+        if let required = chord.requiredOptionKeyCode, required != keyCode { return false }
+        return true
+    }
+
     private func finishOptionIfAlone() {
         guard let started = optionDownAt else { return }
         let duration = CFAbsoluteTimeGetCurrent() - started
-        optionDownAt = nil
         let alone = optionAlone
-        let teach = optionWithShift
+        let shift = optionWithShift
+        let keyCode = optionKeyCode
+        optionDownAt = nil
         optionAlone = false
         optionWithShift = false
         if EventSynth.isSynthesizing || CFAbsoluteTimeGetCurrent() < EventSynth.ignoreOptionUntil {
             return
         }
-        // Up to 0.6s quick tap, no other keys (Shift allowed for teach).
-        if alone && duration < 0.60 {
-            nonisolated(unsafe) let del = self.delegate
-            DispatchQueue.main.async {
-                if EventSynth.isSynthesizing || CFAbsoluteTimeGetCurrent() < EventSynth.ignoreOptionUntil {
-                    return
-                }
-                if teach {
-                    del?.eventTapDidDetectOptionShiftTap()
-                } else {
-                    del?.eventTapDidDetectOptionTap()
-                }
+        guard alone, duration < 0.60 else { return }
+
+        nonisolated(unsafe) let del = self.delegate
+        let teachHit = matches(teachChord, shift: shift, keyCode: keyCode)
+        let convertHit = matches(convertChord, shift: shift, keyCode: keyCode)
+        DispatchQueue.main.async {
+            if EventSynth.isSynthesizing || CFAbsoluteTimeGetCurrent() < EventSynth.ignoreOptionUntil {
+                return
+            }
+            if teachHit {
+                del?.eventTapDidDetectOptionShiftTap()
+            } else if convertHit {
+                del?.eventTapDidDetectOptionTap()
             }
         }
     }

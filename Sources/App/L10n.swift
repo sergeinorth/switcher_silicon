@@ -44,6 +44,42 @@ enum L10n {
         case permTitle
         case permBody
         case diagHint
+        case pauseOn
+        case pauseOff
+        case hotkeys
+        case hotkeyConvert
+        case hotkeyTeach
+        case hotkeyPause
+        case hotkeyUndo
+        case pauseDuration
+        case pause60
+        case pause120
+        case pause300
+        case dictionary
+        case dictIgnored
+        case dictReplacements
+        case dictAddIgnore
+        case dictAddReplacement
+        case dictEmpty
+        case dictDelete
+        case toastLayout
+        case toastSpell
+        case toastTeachApply
+        case toastManual
+        case toastSelection
+        case toastIgnore
+        case toastTeach
+        case toastTeachUndo
+        case toastPauseOn
+        case toastPauseOff
+        case toastPauseDetail(Int)
+        case promptIgnoreTitle
+        case promptIgnoreBody
+        case promptReplaceTitle
+        case promptReplaceFrom
+        case promptReplaceTo
+        case cancel
+        case add
 
         var ru: String {
             switch self {
@@ -92,8 +128,45 @@ enum L10n {
                 Нужны: Мониторинг ввода + Универсальный доступ для /Applications/SwitcherSilicon.app
                 RuSwitcher держи выключенным.
                 Лишнее автоисправление: Option (или ⌘⌥Z) — слово больше не трогаем.
-                Своя замена: опечатка → поправь → Option+Shift.
+                Своя замена: опечатка → поправь → Option+Shift; снова Option+Shift — отменить teach.
+                Пауза: оба Shift (1 мин).
                 """
+            case .pauseOn: return "Пауза: вкл"
+            case .pauseOff: return "Пауза: выкл"
+            case .hotkeys: return "Горячие клавиши"
+            case .hotkeyConvert: return "Конвертация / отмена"
+            case .hotkeyTeach: return "Teach / отмена teach"
+            case .hotkeyPause: return "Пауза"
+            case .hotkeyUndo: return "Отмена в меню: ⌘⌥Z"
+            case .pauseDuration: return "Длительность паузы"
+            case .pause60: return "1 минута"
+            case .pause120: return "2 минуты"
+            case .pause300: return "5 минут"
+            case .dictionary: return "Свои замены и исключения"
+            case .dictIgnored: return "Исключения (не трогать)"
+            case .dictReplacements: return "Замены"
+            case .dictAddIgnore: return "Добавить исключение…"
+            case .dictAddReplacement: return "Добавить замену…"
+            case .dictEmpty: return "(пусто)"
+            case .dictDelete: return "Удалить"
+            case .toastLayout: return "Раскладка"
+            case .toastSpell: return "Опечатка"
+            case .toastTeachApply: return "Своя замена"
+            case .toastManual: return "Конвертация"
+            case .toastSelection: return "Выделение"
+            case .toastIgnore: return "Исключено"
+            case .toastTeach: return "Запомнили замену"
+            case .toastTeachUndo: return "Teach отменён"
+            case .toastPauseOn: return "Пауза"
+            case .toastPauseOff: return "Пауза снята"
+            case let .toastPauseDetail(sec): return "\(sec) сек"
+            case .promptIgnoreTitle: return "Исключение"
+            case .promptIgnoreBody: return "Слово, которое не трогать:"
+            case .promptReplaceTitle: return "Своя замена"
+            case .promptReplaceFrom: return "Было (опечатка):"
+            case .promptReplaceTo: return "Стало:"
+            case .cancel: return "Отмена"
+            case .add: return "Добавить"
             }
         }
 
@@ -144,8 +217,45 @@ enum L10n {
                 Required: Input Monitoring + Accessibility for /Applications/SwitcherSilicon.app
                 Keep RuSwitcher disabled.
                 Wrong auto-fix: Option (or ⌘⌥Z) — we remember the word and leave it alone.
-                Custom fix: typo → correct it → Option+Shift.
+                Custom fix: typo → correct it → Option+Shift; Option+Shift again undoes last teach.
+                Pause: both Shifts (1 min).
                 """
+            case .pauseOn: return "Pause: on"
+            case .pauseOff: return "Pause: off"
+            case .hotkeys: return "Hotkeys"
+            case .hotkeyConvert: return "Convert / undo"
+            case .hotkeyTeach: return "Teach / undo teach"
+            case .hotkeyPause: return "Pause"
+            case .hotkeyUndo: return "Menu undo: ⌘⌥Z"
+            case .pauseDuration: return "Pause duration"
+            case .pause60: return "1 minute"
+            case .pause120: return "2 minutes"
+            case .pause300: return "5 minutes"
+            case .dictionary: return "Custom fixes & exclusions"
+            case .dictIgnored: return "Exclusions (leave alone)"
+            case .dictReplacements: return "Replacements"
+            case .dictAddIgnore: return "Add exclusion…"
+            case .dictAddReplacement: return "Add replacement…"
+            case .dictEmpty: return "(empty)"
+            case .dictDelete: return "Delete"
+            case .toastLayout: return "Layout"
+            case .toastSpell: return "Spell"
+            case .toastTeachApply: return "Custom fix"
+            case .toastManual: return "Convert"
+            case .toastSelection: return "Selection"
+            case .toastIgnore: return "Excluded"
+            case .toastTeach: return "Remembered fix"
+            case .toastTeachUndo: return "Teach undone"
+            case .toastPauseOn: return "Paused"
+            case .toastPauseOff: return "Pause cleared"
+            case let .toastPauseDetail(sec): return "\(sec) sec"
+            case .promptIgnoreTitle: return "Exclusion"
+            case .promptIgnoreBody: return "Word to leave alone:"
+            case .promptReplaceTitle: return "Custom replacement"
+            case .promptReplaceFrom: return "From (typo):"
+            case .promptReplaceTo: return "To:"
+            case .cancel: return "Cancel"
+            case .add: return "Add"
             }
         }
     }

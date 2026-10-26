@@ -9,12 +9,102 @@ public struct Hotkey: Codable, Equatable, Sendable {
     /// Left Option tap (modifier-only trigger handled specially).
     public static let leftOption = Hotkey(keyCode: 0xFFFF, modifiers: 1 << 19) // option alternate
 
+    /// ⌘⌥Z — menu undo.
+    public static let undoDefault = Hotkey(keyCode: 6, modifiers: (1 << 20) | (1 << 19)) // Z + cmd + opt
+
     public var isUnset: Bool { keyCode == 0xFFFF && modifiers == 0 }
 
     public init(keyCode: UInt16, modifiers: UInt64) {
         self.keyCode = keyCode
         self.modifiers = modifiers
     }
+
+    public var hasCommand: Bool { modifiers & (1 << 20) != 0 }
+    public var hasOption: Bool { modifiers & (1 << 19) != 0 }
+    public var hasShift: Bool { modifiers & (1 << 17) != 0 }
+    public var hasControl: Bool { modifiers & (1 << 18) != 0 }
+}
+
+/// Modifier-only chords used by the event tap (not regular key combos).
+public enum ModifierChord: String, Codable, Sendable, CaseIterable {
+    case eitherOption
+    case leftOption
+    case rightOption
+    case optionShift
+    case leftOptionShift
+    case rightOptionShift
+    case bothShifts
+    case disabled
+
+    public func label(language: UILanguage) -> String {
+        switch language {
+        case .russian:
+            switch self {
+            case .eitherOption: return "Option (любой)"
+            case .leftOption: return "Левый Option"
+            case .rightOption: return "Правый Option"
+            case .optionShift: return "Option+Shift"
+            case .leftOptionShift: return "Левый Option+Shift"
+            case .rightOptionShift: return "Правый Option+Shift"
+            case .bothShifts: return "Оба Shift"
+            case .disabled: return "Выкл"
+            }
+        case .english:
+            switch self {
+            case .eitherOption: return "Option (either)"
+            case .leftOption: return "Left Option"
+            case .rightOption: return "Right Option"
+            case .optionShift: return "Option+Shift"
+            case .leftOptionShift: return "Left Option+Shift"
+            case .rightOptionShift: return "Right Option+Shift"
+            case .bothShifts: return "Both Shifts"
+            case .disabled: return "Off"
+            }
+        }
+    }
+
+    public var wantsShift: Bool {
+        switch self {
+        case .optionShift, .leftOptionShift, .rightOptionShift: return true
+        default: return false
+        }
+    }
+
+    public var isOptionBased: Bool {
+        switch self {
+        case .eitherOption, .leftOption, .rightOption,
+             .optionShift, .leftOptionShift, .rightOptionShift:
+            return true
+        case .bothShifts, .disabled:
+            return false
+        }
+    }
+
+    /// `nil` = either side; 58 left, 61 right.
+    public var requiredOptionKeyCode: UInt16? {
+        switch self {
+        case .leftOption, .leftOptionShift: return 58
+        case .rightOption, .rightOptionShift: return 61
+        default: return nil
+        }
+    }
+}
+
+public struct HotkeyPrefs: Codable, Equatable, Sendable {
+    public var convert: ModifierChord
+    public var teach: ModifierChord
+    public var pause: ModifierChord
+    public var undo: Hotkey
+    /// Pause duration in seconds (both-shifts default).
+    public var pauseSeconds: Double
+
+    public static let `default` = HotkeyPrefs(
+        convert: .eitherOption,
+        teach: .optionShift,
+        pause: .bothShifts,
+        undo: .undoDefault,
+        pauseSeconds: 60
+    )
 }
 
 public struct SoundMask: OptionSet, Codable, Equatable, Sendable {
@@ -118,6 +208,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var ignoredWords: [String]
     /// User-taught spell fixes: lowercase typo → preferred spelling.
     public var spellReplacements: [String: String]
+    public var hotkeys: HotkeyPrefs
     public var launchesOnStartup: Bool
     /// Menu / alerts language (not keyboard layout).
     public var uiLanguage: UILanguage
@@ -126,7 +217,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         russianLayoutID: "",
         englishLayoutID: "",
         useOptionTrigger: true,
-        hotkeyUndo: Hotkey(keyCode: 0x33, modifiers: (1 << 20) | (1 << 19)), // Cmd+Opt+Delete placeholder
+        hotkeyUndo: Hotkey.undoDefault,
         hotkeyToggleAutocorrection: .none,
         sounds: .all,
         isSoundOn: true,
@@ -140,6 +231,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         userRules: [],
         ignoredWords: [],
         spellReplacements: [:],
+        hotkeys: .default,
         launchesOnStartup: false,
         uiLanguage: .systemDefault
     )
@@ -162,6 +254,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         userRules: [UserRule],
         ignoredWords: [String],
         spellReplacements: [String: String],
+        hotkeys: HotkeyPrefs,
         launchesOnStartup: Bool,
         uiLanguage: UILanguage
     ) {
@@ -182,6 +275,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.userRules = userRules
         self.ignoredWords = ignoredWords
         self.spellReplacements = spellReplacements
+        self.hotkeys = hotkeys
         self.launchesOnStartup = launchesOnStartup
         self.uiLanguage = uiLanguage
     }
@@ -206,6 +300,13 @@ public struct AppSettings: Codable, Equatable, Sendable {
         userRules = try c.decodeIfPresent([UserRule].self, forKey: .userRules) ?? d.userRules
         ignoredWords = try c.decodeIfPresent([String].self, forKey: .ignoredWords) ?? d.ignoredWords
         spellReplacements = try c.decodeIfPresent([String: String].self, forKey: .spellReplacements) ?? d.spellReplacements
+        hotkeys = try c.decodeIfPresent(HotkeyPrefs.self, forKey: .hotkeys) ?? d.hotkeys
+        // Keep legacy undo field in sync with hotkeys.undo when loading old prefs.
+        if c.contains(.hotkeys) == false, hotkeyUndo.keyCode != Hotkey.undoDefault.keyCode {
+            hotkeys.undo = hotkeyUndo
+        } else {
+            hotkeyUndo = hotkeys.undo
+        }
         launchesOnStartup = try c.decodeIfPresent(Bool.self, forKey: .launchesOnStartup) ?? d.launchesOnStartup
         uiLanguage = try c.decodeIfPresent(UILanguage.self, forKey: .uiLanguage) ?? d.uiLanguage
     }

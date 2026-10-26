@@ -24,10 +24,27 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     /// Typo candidate for Option+Shift teach (set when a word finishes without layout convert).
     private var teachFromWord: String?
     private var teachFromAt: CFAbsoluteTime = 0
+    private var lastTaughtFrom: String?
+    private var lastTaughtTo: String?
+    private var pausedUntil: CFAbsoluteTime = 0
     private var lastCheckResult = "—"
     private var keyEventCount = 0
     private var lastOptionAt: CFAbsoluteTime = 0
     private var replaceQueue: [ReplaceJob] = []
+    /// Human-readable reason for the toast, e.g. "layout" / "spell" / "teach".
+    private(set) var lastActionReason = ""
+
+    enum ActionKind: String {
+        case layout
+        case spell
+        case teachApply
+        case manual
+        case selection
+        case ignore
+        case pause
+        case teach
+        case teachUndo
+    }
 
     private struct ReplaceJob {
         var original: String
@@ -42,10 +59,17 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         var useWordDelete: Bool
         /// Space already in the field (deferred spell path).
         var trailingSpaceInField: Bool
+        var kind: ActionKind
     }
 
     var onStatusChange: ((String) -> Void)?
+    /// Fired with (title, detail) for the action toast.
+    var onActionToast: ((String, String) -> Void)?
     var isTapActive: Bool { eventTap.isEnabled }
+    var isPaused: Bool { CFAbsoluteTimeGetCurrent() < pausedUntil }
+    var pauseRemainingSeconds: Int {
+        max(0, Int(ceil(pausedUntil - CFAbsoluteTimeGetCurrent())))
+    }
 
     init(settings: AppSettings) {
         self.settings = settings
@@ -61,15 +85,39 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             userRules: settings.userRules
         )
         eventTap.delegate = self
+        eventTap.applyHotkeys(settings.hotkeys)
         observeAppActivation()
     }
 
     func start() -> Bool {
         ensureLayoutIDs()
+        eventTap.applyHotkeys(settings.hotkeys)
         let ok = eventTap.start()
         AppLog.line("eventTap.start => \(ok), layout=\(inputSources.currentSourceID)")
         onStatusChange?(ok ? "active" : "no-tap")
         return ok
+    }
+
+    func togglePause(seconds: Double? = nil) {
+        let duration = seconds ?? settings.hotkeys.pauseSeconds
+        if isPaused {
+            pausedUntil = 0
+            AppLog.line("pause off")
+            lastActionReason = ActionKind.pause.rawValue
+            onStatusChange?("pause:off")
+            onActionToast?(L10n.t(.toastPauseOff, settings.uiLanguage), "")
+            soundPlayer.play(.undo)
+        } else {
+            pausedUntil = CFAbsoluteTimeGetCurrent() + duration
+            AppLog.line("pause on \(Int(duration))s")
+            lastActionReason = ActionKind.pause.rawValue
+            onStatusChange?("pause:on")
+            onActionToast?(
+                L10n.t(.toastPauseOn, settings.uiLanguage),
+                L10n.t(.toastPauseDetail(Int(duration)), settings.uiLanguage)
+            )
+            soundPlayer.play(.selectionConvert)
+        }
     }
 
     /// User flipped layout via menu bar / Caps — keep per-app memory in sync so we do not yank it back.
@@ -112,8 +160,10 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
     func reloadSettings(_ settings: AppSettings) {
         self.settings = settings
         soundPlayer.settings = settings
+        eventTap.applyHotkeys(settings.hotkeys)
+        self.settings.hotkeyUndo = settings.hotkeys.undo
         rebuildDetectors()
-        SettingsStore.save(settings)
+        SettingsStore.save(self.settings)
     }
 
     private func rebuildDetectors() {
@@ -139,7 +189,12 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         rebuildDetectors()
         SettingsStore.save(settings)
         AppLog.line("ignore word «\(cleaned)»")
+        lastActionReason = ActionKind.ignore.rawValue
         onStatusChange?("ignore:\(cleaned)")
+        onActionToast?(
+            L10n.t(.toastIgnore, settings.uiLanguage),
+            "«\(cleaned)»"
+        )
     }
 
     var currentSettings: AppSettings { settings }
@@ -153,6 +208,10 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
 
     func eventTap(didReceiveKeyDown keyCode: UInt16, characters: String, flags: CGEventFlags, event: CGEvent) -> Unmanaged<CGEvent>? {
         keyEventCount += 1
+
+        if isPaused {
+            return Unmanaged.passUnretained(event)
+        }
 
         if isExcludedFrontApp() {
             buffer.clear()
@@ -232,8 +291,13 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         Unmanaged.passUnretained(event)
     }
 
+    func eventTapDidDetectPauseChord() {
+        togglePause()
+    }
+
     func eventTapDidDetectOptionTap() {
         guard settings.useOptionTrigger else { return }
+        if isPaused { return }
         if isConverting || EventSynth.isSynthesizing || CFAbsoluteTimeGetCurrent() < EventSynth.ignoreOptionUntil {
             AppLog.line("option ignored: synth/convert")
             return
@@ -255,6 +319,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
 
     func eventTapDidDetectOptionShiftTap() {
         guard settings.useOptionTrigger else { return }
+        if isPaused { return }
         if isConverting || EventSynth.isSynthesizing || CFAbsoluteTimeGetCurrent() < EventSynth.ignoreOptionUntil {
             AppLog.line("option+shift ignored: synth/convert")
             return
@@ -266,7 +331,7 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         }
         lastOptionAt = now
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self] in
-            self?.handleTeachReplacement()
+            self?.handleTeachOrUndoTeach()
         }
     }
 
@@ -418,7 +483,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                         automatic: true,
                         switchLayout: true,
                         immediate: true,
-                        useWordDelete: true
+                        useWordDelete: true,
+                        kind: .layout
                     )
                     return true
                 }
@@ -438,7 +504,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                 automatic: true,
                 switchLayout: false,
                 immediate: true,
-                useWordDelete: true
+                useWordDelete: true,
+                kind: .teachApply
             )
             return true
         }
@@ -480,12 +547,28 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                         switchLayout: false,
                         immediate: true,
                         useWordDelete: false,
-                        trailingSpaceInField: false
+                        trailingSpaceInField: false,
+                        kind: .spell
                     )
                 }
             }
         }
         return false
+    }
+
+    /// Option+Shift: teach typo→fix, or undo the last teach when idle.
+    private func handleTeachOrUndoTeach() {
+        let hasTarget = !buffer.stringValue.isEmpty || !(pendingFinishedWord ?? "").isEmpty
+        let hasFrom = teachFromWord != nil && CFAbsoluteTimeGetCurrent() - teachFromAt < 45
+        if hasFrom, hasTarget {
+            handleTeachReplacement()
+            return
+        }
+        if undoLastTeach() {
+            return
+        }
+        AppLog.line("teach: nothing to teach or undo")
+        soundPlayer.play(.undo)
     }
 
     /// Option+Shift: remember teachFrom → current word (buffer or last finished).
@@ -496,41 +579,85 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         } else if let pending = pendingFinishedWord, !pending.isEmpty {
             toRaw = pending
         } else {
-            AppLog.line("teach: nothing to map to")
-            soundPlayer.play(.undo)
             return
         }
 
         let to = normalizeTeachWord(toRaw)
-        guard to.count >= 2 else {
-            AppLog.line("teach: target too short")
-            soundPlayer.play(.undo)
-            return
-        }
+        guard to.count >= 2 else { return }
 
         guard let fromRaw = teachFromWord,
               CFAbsoluteTimeGetCurrent() - teachFromAt < 45
-        else {
-            AppLog.line("teach: no typo candidate (type typo+Space, fix, then Option+Shift)")
-            soundPlayer.play(.undo)
-            return
-        }
+        else { return }
         let from = normalizeTeachWord(fromRaw)
-        guard from.count >= 2, from.lowercased() != to.lowercased() else {
-            AppLog.line("teach: same word «\(from)»")
-            soundPlayer.play(.undo)
-            return
-        }
+        guard from.count >= 2, from.lowercased() != to.lowercased() else { return }
 
         settings.spellReplacements[from.lowercased()] = to
-        // If it was ignored, drop ignore so the taught fix can run.
         settings.ignoredWords.removeAll { $0.lowercased() == from.lowercased() }
+        lastTaughtFrom = from.lowercased()
+        lastTaughtTo = to
         rebuildDetectors()
         SettingsStore.save(settings)
         clearTeachFrom()
         AppLog.line("teach «\(from)» -> «\(to)»")
         soundPlayer.play(.selectionConvert)
+        lastActionReason = ActionKind.teach.rawValue
         onStatusChange?("teach:\(from)→\(to)")
+        onActionToast?(
+            L10n.t(.toastTeach, settings.uiLanguage),
+            "«\(from)» → «\(to)»"
+        )
+    }
+
+    @discardableResult
+    func undoLastTeach() -> Bool {
+        guard let from = lastTaughtFrom else { return false }
+        let removed = settings.spellReplacements.removeValue(forKey: from)
+        lastTaughtFrom = nil
+        lastTaughtTo = nil
+        rebuildDetectors()
+        SettingsStore.save(settings)
+        AppLog.line("teach undo «\(from)»")
+        soundPlayer.play(.undo)
+        lastActionReason = ActionKind.teachUndo.rawValue
+        onStatusChange?("teach-undo:\(from)")
+        onActionToast?(
+            L10n.t(.toastTeachUndo, settings.uiLanguage),
+            removed.map { "«\(from)» → «\($0)»" } ?? "«\(from)»"
+        )
+        return true
+    }
+
+    func addIgnoredWord(_ word: String) {
+        rememberIgnoredWord(word)
+    }
+
+    func removeIgnoredWord(_ word: String) {
+        let lower = word.lowercased()
+        settings.ignoredWords.removeAll { $0.lowercased() == lower }
+        rebuildDetectors()
+        SettingsStore.save(settings)
+    }
+
+    func addSpellReplacement(from: String, to: String) {
+        let f = normalizeTeachWord(from).lowercased()
+        let t = normalizeTeachWord(to)
+        guard f.count >= 2, t.count >= 2, f != t.lowercased() else { return }
+        settings.spellReplacements[f] = t
+        settings.ignoredWords.removeAll { $0.lowercased() == f }
+        lastTaughtFrom = f
+        lastTaughtTo = t
+        rebuildDetectors()
+        SettingsStore.save(settings)
+    }
+
+    func removeSpellReplacement(from: String) {
+        settings.spellReplacements.removeValue(forKey: from.lowercased())
+        if lastTaughtFrom == from.lowercased() {
+            lastTaughtFrom = nil
+            lastTaughtTo = nil
+        }
+        rebuildDetectors()
+        SettingsStore.save(settings)
     }
 
     private func enqueueReplacement(
@@ -542,7 +669,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         switchLayout: Bool,
         immediate: Bool = false,
         useWordDelete: Bool = false,
-        trailingSpaceInField: Bool = false
+        trailingSpaceInField: Bool = false,
+        kind: ActionKind = .layout
     ) {
         replaceQueue.append(
             ReplaceJob(
@@ -554,7 +682,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                 switchLayout: switchLayout,
                 immediate: immediate,
                 useWordDelete: useWordDelete,
-                trailingSpaceInField: trailingSpaceInField
+                trailingSpaceInField: trailingSpaceInField,
+                kind: kind
             )
         )
         pumpReplaceQueue()
@@ -574,7 +703,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                 automatic: job.automatic,
                 switchLayout: job.switchLayout,
                 useWordDelete: job.useWordDelete,
-                trailingSpaceInField: job.trailingSpaceInField
+                trailingSpaceInField: job.trailingSpaceInField,
+                kind: job.kind
             )
             self.pumpReplaceQueue()
         }
@@ -668,7 +798,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
             switchLayout: true,
             immediate: true,
             useWordDelete: afterSpace,
-            trailingSpaceInField: afterSpace
+            trailingSpaceInField: afterSpace,
+            kind: .manual
         )
     }
 
@@ -728,7 +859,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         automatic: Bool,
         switchLayout: Bool,
         useWordDelete: Bool = false,
-        trailingSpaceInField: Bool = false
+        trailingSpaceInField: Bool = false,
+        kind: ActionKind = .layout
     ) {
         guard !isConverting else {
             replaceQueue.insert(
@@ -741,7 +873,8 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
                     switchLayout: switchLayout,
                     immediate: true,
                     useWordDelete: useWordDelete,
-                    trailingSpaceInField: trailingSpaceInField
+                    trailingSpaceInField: trailingSpaceInField,
+                    kind: kind
                 ),
                 at: 0
             )
@@ -783,8 +916,20 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         )
         buffer.clear()
         pendingFinishedWord = nil
-        AppLog.line("replaced «\(original)» -> «\(converted)» auto=\(automatic) del=\(deleteCount)")
+        AppLog.line("replaced «\(original)» -> «\(converted)» auto=\(automatic) del=\(deleteCount) kind=\(kind.rawValue)")
+        lastActionReason = kind.rawValue
         onStatusChange?(automatic ? "auto:\(converted)" : "manual:\(converted)")
+        let titleKey: L10n.Key
+        switch kind {
+        case .spell: titleKey = .toastSpell
+        case .teachApply: titleKey = .toastTeachApply
+        case .manual: titleKey = .toastManual
+        default: titleKey = .toastLayout
+        }
+        onActionToast?(
+            L10n.t(titleKey, settings.uiLanguage),
+            "«\(original)» → «\(converted)»"
+        )
     }
 
     /// Returns true if a non-empty selection was found and handled.
@@ -900,7 +1045,12 @@ final class LayoutOrchestrator: EventTapDelegate, @unchecked Sendable {
         AppLog.line(
             "option selection(\(viaAX ? "ax" : "clip")) «\(preview(selected))» -> «\(preview(converted))»"
         )
+        lastActionReason = ActionKind.selection.rawValue
         onStatusChange?("selection:\(preview(converted))")
+        onActionToast?(
+            L10n.t(.toastSelection, settings.uiLanguage),
+            "«\(preview(selected))» → «\(preview(converted))»"
+        )
         return true
     }
 
